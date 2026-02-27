@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.python-version
+uv.lock
+*.egg-info/
+.jukit/
+.ruff_cache/
+.mypy_cache/

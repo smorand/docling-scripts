@@ -1,0 +1,19 @@
+[project]
+name = "docling-scripts"
+version = "0.1.0"
+description = "Standalone CLI scripts for document conversion using Docling"
+readme = "README.md"
+requires-python = ">=3.10, <4.0"
+dependencies = [
+    "docling",
+    "requests",
+    "google-auth",
+    "pypdfium2",
+]
+
+[project.scripts]
+doc-to-md = "doc_to_md:main"
+convert-pdf = "convert_pdf:main"
+
+[tool.uv.sources]
+docling = { path = "/Users/sebastien/projects/external/docling", editable = true }
