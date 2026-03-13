@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail;
 
-docling_dir="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/..";
+docling_dir="$(dirname "$(realpath "${BASH_SOURCE[0]}")")";
 
 while [ -n "${1:-}" ]; do
 
@@ -28,7 +28,7 @@ while [ -n "${1:-}" ]; do
     continue;
   fi;
 
-  ( cd "$docling_dir" && uv run python scripts/convert_pdf.py "$target" );
+  ( cd "$docling_dir" && uv run python convert_pdf.py "$target" );
 
   cp "${target/.pdf/_docling}/output_pages.md" "${target/.pdf/.md}";
 
