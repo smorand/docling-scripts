@@ -1,0 +1,4 @@
+services:
+  app:
+    image: ${DOCKER_PREFIX:-}${PROJECT_NAME:-docling-scripts}:${DOCKER_TAG:-latest}
+    restart: unless-stopped

@@ -1,9 +1,47 @@
+# Byte-compiled / optimized
 __pycache__/
-*.pyc
-.venv/
-.python-version
-uv.lock
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
 *.egg-info/
-.jukit/
+*.egg
+
+# Environments
+.env
+.venv
+.python-version
+
+# Tool caches
 .ruff_cache/
 .mypy_cache/
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.jukit/
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# OS files
+.DS_Store
+
+# Log files
+*.log
+
+# Secrets
+*.pem
+*.key
+.env.local
+.env.*.local
+
+# NOTE: uv.lock is committed for reproducible builds
