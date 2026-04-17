@@ -13,7 +13,7 @@ make run ARGS='convert document.pdf'  # Run via uv
 make check         # Full quality gate (lint, format, typecheck, security, tests)
 make install       # Install as uv tool (system-wide: doc-convert)
 make uninstall     # Remove uv tool
-doc-convert download-models              # Pre-download default VLM (granite_vision)
+doc-convert download-models              # Pre-download default VLM (smolvlm)
 doc-convert convert document.pdf         # Convert a document
 ```
 
@@ -34,7 +34,7 @@ src/
 - HTTP client: httpx (not requests)
 - Config: pydantic-settings (not os.environ)
 - Logging: Rich + logging module (not print)
-- Four conversion paths: PDF local (StandardPdfPipeline), PDF/Image Gemini (VlmPipeline), PPTX (Docling native + python-pptx images + VLM), DOCX/XLSX native
+- Four conversion paths: PDF local (StandardPdfPipeline), PDF/Image external LLM (VlmPipeline via google/ or openrouter/), PPTX (Docling native + python-pptx images + VLM), DOCX/XLSX native
 - Offline by default: VLM models pre-downloaded to ~/.cache/models (MODELS_PATH env var), no network calls at runtime
 
 ## Quality Gate

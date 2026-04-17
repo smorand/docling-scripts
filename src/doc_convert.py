@@ -196,9 +196,9 @@ def download_google_doc(url: str, settings: Settings) -> tuple[Path, str, InputF
     return Path(tmp.name), title, fmt
 
 
-# ── Gemini VLM ────────────────────────────────────────────────────────────────
+# ── External LLM providers ───────────────────────────────────────────────────
 
-GEMINI_PROMPT = (
+EXTERNAL_LLM_PROMPT = (
     "Convert this document page to well-structured markdown. "
     "Extract ALL text precisely.\n\n"
     "For administrative documents, clearly identify and highlight:\n"
@@ -216,23 +216,58 @@ GEMINI_PROMPT = (
     "Do not miss any text. Output only the bare markdown."
 )
 
-
-def _require_gemini_key(settings: Settings) -> str:
-    if not settings.gemini_api_key:
-        console.print("[red]GEMINI_API_KEY env var is required for --gemini and image conversion[/red]")
-        raise typer.Exit(1)
-    return settings.gemini_api_key
+PROVIDER_URLS: dict[str, str] = {
+    "google": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+}
 
 
-def build_gemini_vlm_options(settings: Settings) -> ApiVlmOptions:
-    """Build VLM options for Gemini API."""
+def parse_external_llm(value: str) -> tuple[str, str]:
+    """Parse 'provider/model' into (provider, model).
+
+    Examples:
+        google/gemini-3-flash-preview -> ("google", "gemini-3-flash-preview")
+        openrouter/google/gemini-3-pro-preview -> ("openrouter", "google/gemini-3-pro-preview")
+    """
+    for provider in PROVIDER_URLS:
+        prefix = f"{provider}/"
+        if value.startswith(prefix):
+            model = value[len(prefix) :]
+            if not model:
+                console.print(f"[red]Missing model name after '{prefix}'[/red]")
+                raise typer.Exit(1)
+            return provider, model
+    supported = ", ".join(f"{p}/<model>" for p in PROVIDER_URLS)
+    console.print(f"[red]Unknown provider in '{value}'. Supported: {supported}[/red]")
+    raise typer.Exit(1)
+
+
+def _require_api_key(provider: str, settings: Settings) -> str:
+    """Get the API key for a provider, or exit with error."""
+    if provider == "google":
+        if not settings.google_api_key:
+            console.print("[red]GOOGLE_API_KEY env var is required for google/ provider[/red]")
+            raise typer.Exit(1)
+        return settings.google_api_key
+    if provider == "openrouter":
+        if not settings.openrouter_api_key:
+            console.print("[red]OPENROUTER_API_KEY env var is required for openrouter/ provider[/red]")
+            raise typer.Exit(1)
+        return settings.openrouter_api_key
+    console.print(f"[red]Unknown provider: {provider}[/red]")
+    raise typer.Exit(1)
+
+
+def build_external_vlm_options(provider: str, model: str, settings: Settings) -> ApiVlmOptions:
+    """Build VLM options for an external LLM provider."""
+    api_key = _require_api_key(provider, settings)
     return ApiVlmOptions(
-        url=settings.gemini_url,
-        params={"model": settings.gemini_model, "max_tokens": settings.gemini_max_tokens},
-        headers={"Authorization": f"Bearer {_require_gemini_key(settings)}"},
-        prompt=GEMINI_PROMPT,
+        url=PROVIDER_URLS[provider],
+        params={"model": model, "max_tokens": settings.llm_max_tokens},
+        headers={"Authorization": f"Bearer {api_key}"},
+        prompt=EXTERNAL_LLM_PROMPT,
         scale=2.0,
-        timeout=settings.gemini_timeout,
+        timeout=settings.llm_timeout,
         response_format=ResponseFormat.MARKDOWN,
         temperature=0.0,
     )
@@ -465,12 +500,14 @@ def describe_images_with_vlm(image_paths: list[Path], vlm_preset: str, models_pa
     return [re.sub(r"<end_of_utteranc\w*>?", "", d).strip() for d in raw]
 
 
-def describe_images_with_gemini(image_paths: list[Path], settings: Settings) -> list[str]:
-    """Describe images using Gemini API."""
-    logger.info("Describing %d image(s) with Gemini", len(image_paths))
+def describe_images_with_external_llm(
+    image_paths: list[Path], provider: str, model: str, settings: Settings
+) -> list[str]:
+    """Describe images using an external LLM provider."""
+    logger.info("Describing %d image(s) with %s/%s", len(image_paths), provider, model)
     descriptions: list[str] = []
     for img_path in image_paths:
-        md = convert_with_gemini(img_path, InputFormat.IMAGE, settings)
+        md = convert_with_external_llm(img_path, InputFormat.IMAGE, provider, model, settings)
         descriptions.append(md.strip())
     return descriptions
 
@@ -558,9 +595,9 @@ def convert_pdf_local(
         console.print("  output.*     (md, html, json, txt, embedded)")
 
 
-def convert_with_gemini(doc_path: Path, fmt: InputFormat, settings: Settings) -> str:
-    """Convert PDF or image via Gemini VLM pipeline."""
-    vlm_opts = build_gemini_vlm_options(settings)
+def convert_with_external_llm(doc_path: Path, fmt: InputFormat, provider: str, model: str, settings: Settings) -> str:
+    """Convert PDF or image via external LLM VLM pipeline."""
+    vlm_opts = build_external_vlm_options(provider, model, settings)
     pipeline_options = VlmPipelineOptions(
         enable_remote_services=True,
         vlm_options=vlm_opts,
@@ -583,8 +620,8 @@ def convert_with_gemini(doc_path: Path, fmt: InputFormat, settings: Settings) ->
         format_options=format_options,
     )
 
-    with trace_span("docling.convert_gemini", file=doc_path.name, format=fmt.value):
-        logger.info("Converting %s (Gemini VLM)", doc_path.name)
+    with trace_span("docling.convert_external_llm", file=doc_path.name, provider=provider, model=model):
+        logger.info("Converting %s (%s/%s)", doc_path.name, provider, model)
         result = converter.convert(str(doc_path))
         logger.info("Status: %s", result.status)
 
@@ -655,7 +692,7 @@ def convert_pptx(  # noqa: PLR0912
     vlm_preset: str,
     figures: bool,
     all_formats: bool,
-    gemini: bool,
+    external_llm: tuple[str, str] | None,
     settings: Settings,
 ) -> None:
     """PPTX conversion: Docling native text + python-pptx images + VLM descriptions."""
@@ -683,9 +720,9 @@ def convert_pptx(  # noqa: PLR0912
 
         if vlm and all_image_paths:
             with trace_span("vlm.describe_pptx_images", count=len(all_image_paths)):
-                if gemini:
-                    _require_gemini_key(settings)
-                    desc_list = describe_images_with_gemini(all_image_paths, settings)
+                if external_llm:
+                    provider, model = external_llm
+                    desc_list = describe_images_with_external_llm(all_image_paths, provider, model, settings)
                 else:
                     desc_list = describe_images_with_vlm(all_image_paths, vlm_preset, Path(settings.models_path))
                 for ref, desc in zip(item_refs, desc_list, strict=True):
@@ -743,29 +780,17 @@ def write_markdown_output(md: str, output: str | None, auto_output: bool, name: 
         typer.echo(md)
 
 
-# ── CLI commands ─────────────────────────────────────────────────────────────
+# ── CLI ──────────────────────────────────────────────────────────────────────
 
 
-@app.command()
-def download_models(
-    preset: VlmPreset = typer.Argument(
-        VlmPreset.granite_vision,
-        help="VLM preset to download",
-    ),
-    models_path: str | None = typer.Option(
-        None,
-        "--models-path",
-        help="Override MODELS_PATH (default: ~/.cache/models)",
-    ),
-) -> None:
-    """Pre-download VLM model for offline use."""
+def _download_models(preset: str, settings: Settings) -> None:
+    """Download VLM model for offline use."""
     from docling.models.utils.hf_model_download import download_hf_model  # noqa: PLC0415
 
-    settings = Settings()
-    dest = Path(models_path or settings.models_path)
+    dest = Path(settings.models_path)
     dest.mkdir(parents=True, exist_ok=True)
 
-    repo_id = PRESET_REPO_IDS[preset.value]
+    repo_id = PRESET_REPO_IDS[preset]
     cache_folder = repo_id.replace("/", "--")
     target = dest / cache_folder
 
@@ -779,8 +804,9 @@ def download_models(
 
 
 @app.command()
-def convert(
+def main(
     document: str = typer.Argument(
+        None,
         help="File path (PDF, image, DOCX, XLSX, PPTX) or Google Docs/Sheets URL",
     ),
     output: str | None = typer.Option(
@@ -795,10 +821,10 @@ def convert(
         "--auto-output",
         help="Auto-name: <stem>_docling/ for PDF/PPTX local, <stem>.md for others",
     ),
-    gemini: bool = typer.Option(
-        False,
-        "--gemini",
-        help="Use Gemini API instead of local models (PDF, PPTX images, images)",
+    use_external_llm: str | None = typer.Option(
+        None,
+        "--use-external-llm",
+        help="Use external LLM: google/<model> or openrouter/<model>",
     ),
     vlm_preset: VlmPreset = typer.Option(
         VlmPreset.smolvlm,
@@ -825,6 +851,11 @@ def convert(
         "--all",
         help="Generate all export formats (PDF/PPTX: md, html, json, txt)",
     ),
+    download_models: bool = typer.Option(
+        False,
+        "--download-models",
+        help="Download the VLM model (from --vlm-preset) for offline use",
+    ),
     verbose: int = typer.Option(
         0,
         "-v",
@@ -841,9 +872,19 @@ def convert(
 ) -> None:
     """Convert documents to markdown using Docling."""
     setup_logging(verbose=verbose, quiet=quiet)
+
+    if download_models:
+        _download_models(vlm_preset.value, Settings())
+        raise typer.Exit()
+
+    if document is None:
+        console.print("Missing argument 'DOCUMENT'.")
+        raise typer.Exit(1)
     configure_tracing("doc-convert")
     settings = Settings()
     models = Path(settings.models_path)
+
+    ext_llm = parse_external_llm(use_external_llm) if use_external_llm else None
 
     tmp_file: Path | None = None
     try:
@@ -859,7 +900,7 @@ def convert(
             fmt = detect_format(doc_path)
             doc_name = doc_path.stem
 
-        if fmt == InputFormat.PDF and not gemini:
+        if fmt == InputFormat.PDF and not ext_llm:
             out_dir = Path(output) if output else doc_path.parent / f"{doc_path.stem}_docling"
             convert_pdf_local(
                 pdf_path=doc_path,
@@ -880,11 +921,15 @@ def convert(
                 vlm_preset=vlm_preset.value,
                 figures=not no_figures,
                 all_formats=all_formats,
-                gemini=gemini,
+                external_llm=ext_llm,
                 settings=settings,
             )
-        elif (fmt in (InputFormat.PDF, InputFormat.IMAGE) and gemini) or fmt == InputFormat.IMAGE:
-            md = convert_with_gemini(doc_path, fmt, settings)
+        elif (fmt in (InputFormat.PDF, InputFormat.IMAGE) and ext_llm) or fmt == InputFormat.IMAGE:
+            if not ext_llm:
+                console.print("[red]Image conversion requires --use-external-llm[/red]")
+                raise typer.Exit(1)
+            provider, model = ext_llm
+            md = convert_with_external_llm(doc_path, fmt, provider, model, settings)
             write_markdown_output(md, output, auto_output, doc_name)
         else:
             md = convert_native(doc_path, fmt)

@@ -14,14 +14,14 @@ class Settings(BaseSettings):
 
     Environment variables (no prefix, standard names):
         MODELS_PATH          - Local model cache directory (default: ~/.cache/models)
-        GEMINI_API_KEY       - Gemini API key for VLM conversion
-        GOOGLE_CREDENTIALS   - Path to Google credentials JSON
+        GOOGLE_API_KEY       - Google GenAI API key (for google/ provider)
+        OPENROUTER_API_KEY   - OpenRouter API key (for openrouter/ provider)
+        GOOGLE_CREDENTIALS   - Path to Google credentials JSON (for Google Docs/Sheets)
     """
 
     models_path: str = str(DEFAULT_MODELS_PATH)
-    gemini_api_key: str = ""
+    google_api_key: str = ""
+    openrouter_api_key: str = ""
     google_credentials: str = ""
-    gemini_model: str = "gemini-3-flash-preview"
-    gemini_max_tokens: int = 8192
-    gemini_timeout: float = 120.0
-    gemini_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    llm_max_tokens: int = 8192
+    llm_timeout: float = 120.0

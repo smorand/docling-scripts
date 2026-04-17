@@ -17,11 +17,11 @@ make install    # Installs doc-convert as isolated uv tool in ~/.local/bin/
 VLM models must be pre-downloaded before use. No network calls at runtime.
 
 ```bash
-# Download default model (granite_vision, ~2B params)
+# Download default model (smolvlm, ~256M params)
 doc-convert download-models
 
 # Download a specific preset
-doc-convert download-models smolvlm
+doc-convert download-models granite_vision
 doc-convert download-models pixtral
 doc-convert download-models qwen
 
@@ -38,22 +38,22 @@ Models are stored in `~/.cache/models/` (override with `MODELS_PATH` env var).
 doc-convert convert document.pdf                       # output to <stem>_docling/
 doc-convert convert document.pdf -o /tmp/output        # custom output directory
 doc-convert convert document.pdf --no-vlm              # skip picture descriptions
-doc-convert convert document.pdf --vlm-preset smolvlm  # use smolvlm instead of granite_vision
+doc-convert convert document.pdf --vlm-preset granite_vision
 doc-convert convert document.pdf --all                 # + html, json, txt exports
 
-# PDF via Gemini API (quick markdown, no figure extraction)
-doc-convert convert document.pdf --gemini              # output to stdout
-doc-convert convert document.pdf --gemini -o out.md    # output to file
+# PDF via external LLM (quick markdown, no figure extraction)
+doc-convert convert document.pdf --use-external-llm google/gemini-3-flash-preview
+doc-convert convert document.pdf --use-external-llm openrouter/google/gemini-3-pro-preview
 
 # PPTX: native text + image extraction with VLM descriptions
 doc-convert convert slides.pptx                        # output to <stem>_docling/
-doc-convert convert slides.pptx --gemini               # use Gemini for image descriptions
+doc-convert convert slides.pptx --use-external-llm google/gemini-3-flash-preview
 doc-convert convert slides.pptx --no-vlm               # skip image descriptions
 doc-convert convert slides.pptx --no-figures            # text + tables only
 
-# Images (uses Gemini VLM)
-doc-convert convert scan.png                           # output to stdout
-doc-convert convert scan.png -O                        # output to <stem>.md
+# Images (requires external LLM)
+doc-convert convert scan.png --use-external-llm google/gemini-3-flash-preview
+doc-convert convert scan.png --use-external-llm openrouter/google/gemini-3-pro-preview -O
 
 # DOCX / XLSX (native parsers)
 doc-convert convert document.docx                      # output to stdout
@@ -63,6 +63,17 @@ doc-convert convert document.docx -o out.md            # output to file
 doc-convert convert "https://docs.google.com/document/d/DOC_ID/edit"
 doc-convert convert "https://docs.google.com/spreadsheets/d/SHEET_ID/edit"
 ```
+
+### External LLM Providers
+
+`--use-external-llm` supports two providers:
+
+| Provider | Format | API Key |
+|---|---|---|
+| Google GenAI | `google/<model>` | `GOOGLE_API_KEY` |
+| OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` |
+
+Examples: `google/gemini-3-flash-preview`, `openrouter/google/gemini-3-pro-preview`, `openrouter/anthropic/claude-sonnet-4`
 
 ### PDF/PPTX Output Structure
 
@@ -80,8 +91,8 @@ With `--all`, additional exports: `output.md`, `output_embedded.md`, `output.htm
 PPTX uses a hybrid approach:
 - **Docling native** for structured text, tables, and lists
 - **python-pptx** for robust image extraction (with recursion into grouped shapes)
-- **Local VLM** (granite_vision by default) for image descriptions (offline)
-- **Gemini API** (`--gemini`) as alternative for image descriptions
+- **Local VLM** (smolvlm by default) for image descriptions (offline)
+- **External LLM** (`--use-external-llm`) as alternative for image descriptions
 
 Note: Charts and SmartArt are not extracted (they require a rendering engine). For chart-heavy presentations, consider converting to PDF first via LibreOffice.
 
@@ -90,7 +101,8 @@ Note: Charts and SmartArt are not extracted (they require a rendering engine). F
 | Variable | Required for | Purpose |
 |---|---|---|
 | `MODELS_PATH` | Local VLM | Model cache directory (default: `~/.cache/models`) |
-| `GEMINI_API_KEY` | `--gemini`, image conversion | Gemini API key |
+| `GOOGLE_API_KEY` | `google/` provider | Google GenAI API key |
+| `OPENROUTER_API_KEY` | `openrouter/` provider | OpenRouter API key |
 | `GOOGLE_CREDENTIALS` | Google Docs/Sheets URLs | Path to Google credentials JSON |
 
 ## Development
