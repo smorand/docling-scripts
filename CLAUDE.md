@@ -15,7 +15,7 @@ make install       # Install as uv tool (system-wide: doc-convert)
 make uninstall     # Remove uv tool
 doc-convert --download-models              # Pre-download default VLM (smolvlm)
 doc-convert document.pdf                   # Convert a document
-doc-convert --start-audio                  # Record + transcribe
+doc-convert --start-audio "Meeting Name"   # Record + transcribe
 doc-convert video.mp4                      # Extract video content
 ```
 
@@ -23,14 +23,30 @@ doc-convert video.mp4                      # Extract video content
 
 ```
 src/
-├── doc_convert.py    # Typer CLI entry point + conversion logic
-├── config.py         # Settings (pydantic-settings)
-├── media_llm.py      # Direct LLM client for audio/video (Gemini Files API + OpenRouter)
-├── audio.py          # Audio recording (sox) + transcription/analysis prompts
-├── video.py          # Video processing + YouTube download (yt-dlp) + prompts
-├── logging_config.py # Rich logging setup
-├── tracing.py        # OpenTelemetry tracing
-└── py.typed          # PEP 561 marker
+├── doc_convert/          # Main package
+│   ├── __init__.py       # Re-exports app
+│   ├── cli.py            # Typer CLI entry point + dispatch
+│   ├── base.py           # BaseConverter + ConvertOptions
+│   ├── converters/       # One class per document type
+│   │   ├── pdf.py        # PdfConverter (local pipeline)
+│   │   ├── docx.py       # DocxConverter (images + VLM)
+│   │   ├── xlsx.py       # XlsxConverter
+│   │   ├── pptx.py       # PptxConverter (python-pptx + VLM)
+│   │   ├── image.py      # ImageConverter (external LLM)
+│   │   └── media.py      # MediaConverter (audio/video)
+│   ├── markdown.py       # Shared markdown building + image catalog
+│   ├── vlm.py            # VLM description pipelines (local + external)
+│   ├── providers.py      # External LLM provider config
+│   ├── google_docs.py    # Google Docs/Sheets download
+│   ├── formats.py        # Format detection, VLM presets
+│   └── output.py         # Output dir helpers, cache check
+├── config.py             # Settings (pydantic-settings)
+├── media_llm.py          # Direct LLM client for audio/video (Gemini Files API + OpenRouter)
+├── audio.py              # Audio recording (sox) + transcription/analysis prompts
+├── video.py              # Video processing + YouTube download (yt-dlp) + prompts
+├── logging_config.py     # Rich logging setup
+├── tracing.py            # OpenTelemetry tracing
+└── py.typed              # PEP 561 marker
 ```
 
 ## Conventions

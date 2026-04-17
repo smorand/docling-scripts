@@ -255,6 +255,21 @@ def process_media_openrouter(
                 json={"model": model, "messages": messages},
             )
             if not resp.is_success:
+                if resp.status_code == 502:  # noqa: PLR2004
+                    size_mb = file_path.stat().st_size / (1024 * 1024)
+                    logger.error(
+                        "OpenRouter returned 502: file too large (%.1f MB as base64). "
+                        "Use google/ provider with Files API instead.",
+                        size_mb,
+                    )
+                    msg = (
+                        f"File too large for OpenRouter ({size_mb:.0f} MB as base64 payload).\n"
+                        "OpenRouter has payload size limits for inline media.\n\n"
+                        "Use the google/ provider instead (uploads via Files API, no size limit):\n"
+                        f"  doc-convert {file_path.name} --use-external-llm google/gemini-2.5-flash\n"
+                        "  (requires GOOGLE_API_KEY env var)"
+                    )
+                    raise RuntimeError(msg)
                 error_body = resp.text[:500]
                 logger.error("OpenRouter error %d: %s", resp.status_code, error_body)
                 resp.raise_for_status()
