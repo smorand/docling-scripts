@@ -39,10 +39,11 @@ src/
 - HTTP client: httpx (not requests)
 - Config: pydantic-settings (not os.environ)
 - Logging: Rich + logging module (not print)
-- Six conversion paths: PDF local, PDF/Image external LLM, PPTX (Docling + python-pptx + VLM), DOCX/XLSX native, Audio (transcription via external LLM), Video (extraction via external LLM)
+- Six conversion paths: PDF local, PDF/Image external LLM, PPTX (Docling + python-pptx + VLM), DOCX (Docling + VLM images), XLSX native, Audio (transcription via external LLM), Video (extraction via external LLM)
 - Offline by default for documents: VLM models pre-downloaded to ~/.cache/models
 - Audio/video require external LLM (default: openrouter/google/gemini-2.5-flash)
 - Cache: skip conversion if output exists, use -f to force
+- Unified output: all conversions output to `<name>_docling/document.md`
 
 ## Quality Gate
 

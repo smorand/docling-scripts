@@ -23,46 +23,63 @@ Models are stored in `~/.cache/models/` (override with `MODELS_PATH` env var).
 
 ## Usage
 
+All conversions output to a `<name>_docling/` directory with `document.md` as the main file.
+
 ```bash
 # PDF: full local extraction (figures, tables, OCR, page annotations)
-doc-convert document.pdf                                # output to <stem>_docling/
-doc-convert document.pdf -o /tmp/output                 # custom output directory
-doc-convert document.pdf --no-vlm                       # skip picture descriptions
+doc-convert document.pdf
+doc-convert document.pdf --no-vlm --no-figures          # text + tables only, faster
 doc-convert document.pdf --all                          # + html, json, txt exports
 
 # PDF via external LLM (quick markdown, no figure extraction)
 doc-convert document.pdf --use-external-llm google/gemini-2.5-flash
 
-# PPTX: native text + image extraction with VLM descriptions
-doc-convert slides.pptx                                 # output to <stem>_docling/
-doc-convert slides.pptx --use-external-llm openrouter/google/gemini-2.5-flash
-doc-convert slides.pptx --no-vlm                        # skip image descriptions
+# DOCX: native text + image extraction with VLM descriptions
+doc-convert document.docx
+doc-convert document.docx --no-figures                  # text only
 
-# Audio: transcription (requires external LLM, default: openrouter/google/gemini-2.5-flash)
-doc-convert meeting.ogg                                 # transcription to <stem>_transcription.md
-doc-convert meeting.ogg --analyze                       # + structured analysis
-doc-convert meeting.ogg -m "Weekly standup"             # with meeting context
-doc-convert --start-audio                               # record from mic, Ctrl+C to transcribe
-doc-convert --start-audio --analyze -m "Standup"        # record + transcribe + analyze
+# PPTX: native text + image extraction with VLM descriptions
+doc-convert slides.pptx
+
+# XLSX
+doc-convert spreadsheet.xlsx
+
+# Audio: transcription (requires external LLM, auto: openrouter/google/gemini-2.5-flash)
+doc-convert meeting.ogg                                 # → meeting_docling/document.md
+doc-convert meeting.ogg --analyze                       # + analysis.md
+doc-convert meeting.ogg --analyze -i "Focus on action items only"
+
+# Live recording from microphone
+doc-convert --start-audio "Weekly Standup"              # → Weekly Standup_docling/audio.ogg + document.md
+doc-convert --start-audio "One 2 One" --analyze         # + analysis.md
 
 # Video: content extraction (requires external LLM)
-doc-convert video.mp4                                   # extraction to <stem>_extraction.md
-doc-convert video.mp4 --analyze                         # + executive summary
+doc-convert video.mp4                                   # → video_docling/document.md
+doc-convert video.mp4 --analyze                         # + analysis.md
 doc-convert "https://youtube.com/watch?v=..."           # YouTube via yt-dlp
 
 # Images (requires external LLM)
 doc-convert scan.png --use-external-llm google/gemini-2.5-flash
 
-# DOCX / XLSX (native parsers)
-doc-convert document.docx                               # output to stdout
-doc-convert document.docx -o out.md                     # output to file
-
 # Google Docs / Sheets
 doc-convert "https://docs.google.com/document/d/DOC_ID/edit"
 
-# Cache: skip conversion if output exists (use -f to force)
-doc-convert document.pdf                                # skips if output exists
+# Cache: skip if output exists, use -f to force
+doc-convert document.pdf                                # skips if _docling/ exists
 doc-convert document.pdf -f                             # force re-conversion
+doc-convert document.pdf -o /custom/output              # override output directory
+```
+
+### Output Structure
+
+```
+<name>_docling/
+├── document.md    # Main file (always present)
+├── images.md      # Image catalog (PDF, DOCX, PPTX with figures)
+├── figures/       # Extracted images (PDF, DOCX, PPTX with figures)
+├── analysis.md    # Analysis (audio/video with --analyze)
+├── audio.ogg      # Recording (--start-audio only)
+└── output.*       # Additional formats (--all: md, html, json, txt)
 ```
 
 ### External LLM Providers

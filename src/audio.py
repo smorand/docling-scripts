@@ -9,14 +9,11 @@ from __future__ import annotations
 import logging
 import signal
 import subprocess
-from datetime import datetime
-from pathlib import Path
+from pathlib import Path  # noqa: TC003
 
 from logging_config import console
 
 logger = logging.getLogger(__name__)
-
-RECORDS_DIR = Path.home() / "Downloads" / "Records"
 
 TRANSCRIPTION_PROMPT = (
     "Transcribe this audio recording into structured meeting minutes.\n\n"
@@ -61,26 +58,24 @@ def check_sox() -> None:
         raise SystemExit(1) from None
 
 
-def record_audio(label: str | None = None) -> Path:
+def record_audio(output_path: Path) -> Path:
     """Record audio from microphone using sox. Ctrl+C stops recording.
+
+    Args:
+        output_path: Where to save the recorded audio (e.g. name_docling/audio.ogg).
 
     Returns the path to the recorded file.
     """
     check_sox()
 
-    RECORDS_DIR.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    safe_label = (label or "recording").replace(" ", "_")
-    filename = f"{timestamp}_{safe_label}.ogg"
-    filepath = RECORDS_DIR / filename
-
-    logger.info("Recording to %s (Ctrl+C to stop)", filepath)
-    console.print(f"[bold green]Recording...[/bold green] {filepath.name}")
+    logger.info("Recording to %s (Ctrl+C to stop)", output_path)
+    console.print(f"[bold green]Recording...[/bold green] {output_path}")
     console.print("[dim]Press Ctrl+C to stop[/dim]")
 
     proc = subprocess.Popen(
-        ["sox", "-d", "-c", "1", "-r", "16000", str(filepath)],
+        ["sox", "-d", "-c", "1", "-r", "16000", str(output_path)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -90,13 +85,13 @@ def record_audio(label: str | None = None) -> Path:
     except KeyboardInterrupt:
         proc.send_signal(signal.SIGINT)
         proc.wait()
-        console.print(f"\n[green]Recording saved:[/green] {filepath}")
+        console.print(f"\n[green]Recording saved:[/green] {output_path}")
 
-    if not filepath.exists() or filepath.stat().st_size == 0:
+    if not output_path.exists() or output_path.stat().st_size == 0:
         console.print("[red]Recording failed or empty[/red]")
         raise SystemExit(1)
 
-    return filepath
+    return output_path
 
 
 def build_transcription_prompt(meeting_name: str | None = None) -> tuple[str, str | None]:

@@ -628,28 +628,110 @@ def convert_with_external_llm(doc_path: Path, fmt: InputFormat, provider: str, m
     return result.document.export_to_markdown()  # type: ignore[no-any-return]
 
 
-def convert_native(doc_path: Path, fmt: InputFormat) -> str:
-    """Convert DOCX/XLSX with native parsers."""
-    if fmt == InputFormat.DOCX:
-        converter = DocumentConverter(
-            allowed_formats=[InputFormat.DOCX],
-            format_options={InputFormat.DOCX: WordFormatOption()},
-        )
-    elif fmt == InputFormat.XLSX:
-        converter = DocumentConverter(
-            allowed_formats=[InputFormat.XLSX],
-            format_options={InputFormat.XLSX: ExcelFormatOption()},
-        )
-    else:
-        console.print(f"[red]Unsupported format: {fmt}[/red]")
-        raise typer.Exit(1)
+def convert_docx(  # noqa: PLR0912, PLR0915
+    docx_path: Path,
+    output_dir: Path,
+    *,
+    vlm: bool,
+    vlm_preset: str,
+    figures: bool,
+    all_formats: bool,
+    external_llm: tuple[str, str] | None,
+    settings: Settings,
+) -> None:
+    """DOCX conversion: Docling native + image extraction + VLM descriptions."""
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    with trace_span("docling.convert_native", file=doc_path.name, format=fmt.value):
-        logger.info("Converting %s (%s)", doc_path.name, fmt.value)
-        result = converter.convert(str(doc_path))
+    converter = DocumentConverter(
+        allowed_formats=[InputFormat.DOCX],
+        format_options={InputFormat.DOCX: WordFormatOption()},
+    )
+
+    with trace_span("docling.convert_docx", file=docx_path.name):
+        logger.info("Converting %s (DOCX native)", docx_path.name)
+        result = converter.convert(str(docx_path))
         logger.info("Status: %s", result.status)
 
-    return result.document.export_to_markdown()  # type: ignore[no-any-return]
+    doc = result.document
+
+    figure_map: dict[str, str] = {}
+    figure_descriptions: dict[str, str] = {}
+    fig_count = 0
+    image_paths: list[Path] = []
+    item_refs: list[str] = []
+
+    if figures:
+        fig_dir = output_dir / "figures"
+        fig_dir.mkdir(exist_ok=True)
+        for item, _ in doc.iterate_items():
+            if isinstance(item, PictureItem):
+                img = item.get_image(doc)
+                if img:
+                    filename = f"figure_{fig_count}.png"
+                    img.save(fig_dir / filename)
+                    figure_map[item.self_ref] = f"figures/{filename}"
+                    image_paths.append(fig_dir / filename)
+                    item_refs.append(item.self_ref)
+                    fig_count += 1
+
+        if vlm and image_paths:
+            with trace_span("vlm.describe_docx_images", count=len(image_paths)):
+                if external_llm:
+                    provider, model = external_llm
+                    desc_list = describe_images_with_external_llm(image_paths, provider, model, settings)
+                else:
+                    desc_list = describe_images_with_vlm(image_paths, vlm_preset, Path(settings.models_path))
+                for ref, desc in zip(item_refs, desc_list, strict=True):
+                    if desc:
+                        figure_descriptions[ref] = desc
+
+    title = ""
+    for t in doc.texts:
+        if t.label == DocItemLabel.TITLE:
+            title = t.text
+            break
+
+    page_md = build_page_annotated_markdown(doc, figure_map, title, figure_descriptions=figure_descriptions)
+    (output_dir / "document.md").write_text(page_md)
+
+    if fig_count > 0:
+        catalog = build_images_catalog(doc, figure_map)
+        (output_dir / "images.md").write_text(catalog)
+
+    if all_formats:
+        (output_dir / "output.md").write_text(doc.export_to_markdown())
+        (output_dir / "output.json").write_text(json.dumps(doc.export_to_dict(), indent=2, default=str))
+        (output_dir / "output.txt").write_text(doc.export_to_text())
+        (output_dir / "output.html").write_text(doc.export_to_html())
+
+    if title:
+        logger.info("Title: %s", title)
+    _print_output_summary(output_dir, fig_count, all_formats, vlm and fig_count > 0, len(figure_descriptions))
+
+
+def convert_xlsx(xlsx_path: Path, output_dir: Path, *, all_formats: bool) -> None:
+    """XLSX conversion: Docling native to directory output."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    converter = DocumentConverter(
+        allowed_formats=[InputFormat.XLSX],
+        format_options={InputFormat.XLSX: ExcelFormatOption()},
+    )
+
+    with trace_span("docling.convert_xlsx", file=xlsx_path.name):
+        logger.info("Converting %s (XLSX native)", xlsx_path.name)
+        result = converter.convert(str(xlsx_path))
+        logger.info("Status: %s", result.status)
+
+    doc = result.document
+    (output_dir / "document.md").write_text(doc.export_to_markdown())
+
+    if all_formats:
+        (output_dir / "output.json").write_text(json.dumps(doc.export_to_dict(), indent=2, default=str))
+        (output_dir / "output.txt").write_text(doc.export_to_text())
+        (output_dir / "output.html").write_text(doc.export_to_html())
+
+    _print_output_summary(output_dir, 0, all_formats)
 
 
 def _map_pptx_images_to_items(
@@ -765,19 +847,34 @@ def convert_pptx(  # noqa: PLR0912
 # ── Output helpers ────────────────────────────────────────────────────────────
 
 
-def write_markdown_output(md: str, output: str | None, auto_output: bool, name: str) -> None:
-    """Write markdown to file or stdout."""
-    if output:
-        out = Path(output)
-        out.write_text(md)
-        console.print(f"[green]Written to {out}[/green]")
-    elif auto_output:
-        safe_name = re.sub(r"[^\w\s-]", "", name).strip().replace(" ", "_")
-        out = Path(f"{safe_name}.md")
-        out.write_text(md)
-        console.print(f"[green]Written to {out}[/green]")
-    else:
-        typer.echo(md)
+def _print_output_summary(
+    output_dir: Path,
+    fig_count: int = 0,
+    all_formats: bool = False,
+    vlm_used: bool = False,
+    desc_count: int = 0,
+    extra_files: list[str] | None = None,
+) -> None:
+    """Print a consistent output summary."""
+    console.print(f"[green]Output:[/green] {output_dir}/")
+    console.print("  document.md")
+    if fig_count > 0:
+        console.print("  images.md")
+        console.print(f"  figures/     ({fig_count} figure(s))")
+        if vlm_used:
+            console.print(f"  VLM descriptions: {desc_count}/{fig_count}")
+    for f in extra_files or []:
+        console.print(f"  {f}")
+    if all_formats:
+        console.print("  output.*     (md, html, json, txt)")
+
+
+def _resolve_output_dir(source_path: Path | None, name: str, output_override: str | None) -> Path:
+    """Compute the <name>_docling/ output directory."""
+    if output_override:
+        return Path(output_override)
+    parent = source_path.parent if source_path else Path.cwd()
+    return parent / f"{name}_docling"
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -829,24 +926,18 @@ def _check_cache(out_path: Path, force: bool) -> bool:
 def main(  # noqa: PLR0912, PLR0915
     document: str = typer.Argument(
         None,
-        help="File path (PDF, image, DOCX, XLSX, PPTX, audio, video) or URL",
+        help="File path or URL. Required unless --start-audio or --download-models is used.",
     ),
     output: str | None = typer.Option(
         None,
         "-o",
         "--output",
-        help="Output path (directory for PDF/PPTX, file for others)",
-    ),
-    auto_output: bool = typer.Option(
-        False,
-        "-O",
-        "--auto-output",
-        help="Auto-name output based on input filename",
+        help="Override output directory (default: <name>_docling/)",
     ),
     use_external_llm: str | None = typer.Option(
         None,
         "--use-external-llm",
-        help="External LLM: google/<model> or openrouter/<model>",
+        help="External LLM provider: google/<model> or openrouter/<model>",
     ),
     vlm_preset: VlmPreset = typer.Option(
         VlmPreset.smolvlm,
@@ -856,44 +947,44 @@ def main(  # noqa: PLR0912, PLR0915
     no_ocr: bool = typer.Option(
         False,
         "--no-ocr",
-        help="Disable OCR (local PDF only)",
+        help="Disable OCR (PDF only)",
     ),
     no_vlm: bool = typer.Option(
         False,
         "--no-vlm",
-        help="Disable VLM picture descriptions (PDF, PPTX)",
+        help="Disable VLM picture descriptions (PDF, DOCX, PPTX)",
     ),
     no_figures: bool = typer.Option(
         False,
         "--no-figures",
-        help="Skip figure extraction entirely (text + tables only, faster)",
+        help="Skip figure extraction (text + tables only, faster)",
     ),
     all_formats: bool = typer.Option(
         False,
         "--all",
-        help="Generate all export formats (PDF/PPTX: md, html, json, txt)",
+        help="Export all formats (md, html, json, txt) in addition to document.md",
     ),
     start_audio: bool = typer.Option(
         False,
         "--start-audio",
-        help="Record audio from microphone, Ctrl+C to stop and transcribe",
+        help="Record from microphone (Ctrl+C to stop). DOCUMENT becomes the name.",
     ),
     analyze: bool = typer.Option(
         False,
         "--analyze",
-        help="Run analysis pass (structured summary for audio, executive summary for video)",
+        help="Add analysis pass: analysis.md (audio: summary, video: executive brief)",
     ),
     meeting: str | None = typer.Option(
         None,
         "-m",
         "--meeting",
-        help="Meeting name or context (audio/video)",
+        help="Meeting name or context for audio/video prompts",
     ),
     instructions: str | None = typer.Option(
         None,
         "-i",
         "--instructions",
-        help="Custom instructions for analysis (audio/video --analyze)",
+        help="Custom prompt for --analyze (overrides default analysis prompt)",
     ),
     force: bool = typer.Option(
         False,
@@ -904,14 +995,14 @@ def main(  # noqa: PLR0912, PLR0915
     download_models: bool = typer.Option(
         False,
         "--download-models",
-        help="Download the VLM model (from --vlm-preset) for offline use",
+        help="Download the VLM model selected by --vlm-preset for offline use",
     ),
     verbose: int = typer.Option(
         0,
         "-v",
         "--verbose",
         count=True,
-        help="Increase verbosity (use -vv for debug)",
+        help="Increase verbosity (-vv for debug)",
     ),
     quiet: bool = typer.Option(
         False,
@@ -920,7 +1011,19 @@ def main(  # noqa: PLR0912, PLR0915
         help="Only show warnings and errors",
     ),
 ) -> None:
-    """Convert documents, audio, and video to markdown."""
+    """Convert documents, audio, and video to markdown.
+
+    Output always goes to <name>_docling/ directory with document.md as main file.
+    Use -o to override the output directory.
+
+    \b
+    Documents:  doc-convert document.pdf
+    Audio:      doc-convert meeting.ogg [--analyze]
+    Video:      doc-convert video.mp4 [--analyze]
+    YouTube:    doc-convert https://youtube.com/watch?v=...
+    Record:     doc-convert --start-audio "Meeting Name"
+    Models:     doc-convert --download-models
+    """
     setup_logging(verbose=verbose, quiet=quiet)
 
     if download_models:
@@ -929,22 +1032,29 @@ def main(  # noqa: PLR0912, PLR0915
 
     # ── Audio recording mode ─────────────────────────────────────────────
     if start_audio:
+        if not document:
+            console.print('[red]--start-audio requires a name: doc-convert --start-audio "Meeting Name"[/red]')
+            raise typer.Exit(1)
+
         from audio import record_audio  # noqa: PLC0415
 
         configure_tracing("doc-convert")
         settings = Settings()
-        recorded = record_audio(label=meeting)
-        _process_audio(recorded, output, meeting, analyze, instructions, force, use_external_llm, settings)
+        out_dir = _resolve_output_dir(None, document, output)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        audio_file = record_audio(out_dir / "audio.ogg")
+        _process_media_to_dir(
+            audio_file, out_dir, "audio", meeting or document, analyze, instructions, force, use_external_llm, settings
+        )
         raise typer.Exit()
 
     if document is None:
-        console.print("Missing argument 'DOCUMENT'.")
+        console.print("Missing argument 'DOCUMENT'. See --help.")
         raise typer.Exit(1)
 
     configure_tracing("doc-convert")
     settings = Settings()
     models = Path(settings.models_path)
-
     ext_llm = parse_external_llm(use_external_llm) if use_external_llm else None
 
     # ── YouTube URL ──────────────────────────────────────────────────────
@@ -954,8 +1064,11 @@ def main(  # noqa: PLR0912, PLR0915
         from video import download_youtube  # noqa: PLC0415
 
         downloaded = download_youtube(document)
+        out_dir = _resolve_output_dir(Path.cwd(), downloaded.stem, output)
         try:
-            _process_video(downloaded, output, meeting, analyze, instructions, force, use_external_llm, settings)
+            _process_media_to_dir(
+                downloaded, out_dir, "video", meeting, analyze, instructions, force, use_external_llm, settings
+            )
         finally:
             downloaded.unlink(missing_ok=True)
         raise typer.Exit()
@@ -977,52 +1090,79 @@ def main(  # noqa: PLR0912, PLR0915
 
             ext = doc_path.suffix.lower()
             if is_audio_ext(ext):
-                _process_audio(doc_path, output, meeting, analyze, instructions, force, use_external_llm, settings)
+                out_dir = _resolve_output_dir(doc_path, doc_path.stem, output)
+                _process_media_to_dir(
+                    doc_path, out_dir, "audio", meeting, analyze, instructions, force, use_external_llm, settings
+                )
                 raise typer.Exit()
             if is_video_ext(ext):
-                _process_video(doc_path, output, meeting, analyze, instructions, force, use_external_llm, settings)
+                out_dir = _resolve_output_dir(doc_path, doc_path.stem, output)
+                _process_media_to_dir(
+                    doc_path, out_dir, "video", meeting, analyze, instructions, force, use_external_llm, settings
+                )
                 raise typer.Exit()
 
             fmt = detect_format(doc_path)
             doc_name = doc_path.stem
 
+        out_dir = _resolve_output_dir(doc_path, doc_name, output)
+        if _check_cache(out_dir, force):
+            raise typer.Exit()
+
         # ── Document conversion (Docling) ────────────────────────────────
         if fmt == InputFormat.PDF and not ext_llm:
-            out_dir = Path(output) if output else doc_path.parent / f"{doc_path.stem}_docling"
-            if not _check_cache(out_dir, force):
-                convert_pdf_local(
-                    pdf_path=doc_path,
-                    output_dir=out_dir,
-                    do_ocr=not no_ocr,
-                    vlm=not no_vlm,
-                    vlm_preset=vlm_preset.value,
-                    figures=not no_figures,
-                    all_formats=all_formats,
-                    models_path=models,
-                )
+            convert_pdf_local(
+                pdf_path=doc_path,
+                output_dir=out_dir,
+                do_ocr=not no_ocr,
+                vlm=not no_vlm,
+                vlm_preset=vlm_preset.value,
+                figures=not no_figures,
+                all_formats=all_formats,
+                models_path=models,
+            )
         elif fmt == InputFormat.PPTX:
-            out_dir = Path(output) if output else doc_path.parent / f"{doc_path.stem}_docling"
-            if not _check_cache(out_dir, force):
-                convert_pptx(
-                    pptx_path=doc_path,
-                    output_dir=out_dir,
-                    vlm=not no_vlm,
-                    vlm_preset=vlm_preset.value,
-                    figures=not no_figures,
-                    all_formats=all_formats,
-                    external_llm=ext_llm,
-                    settings=settings,
-                )
-        elif (fmt in (InputFormat.PDF, InputFormat.IMAGE) and ext_llm) or fmt == InputFormat.IMAGE:
+            convert_pptx(
+                pptx_path=doc_path,
+                output_dir=out_dir,
+                vlm=not no_vlm,
+                vlm_preset=vlm_preset.value,
+                figures=not no_figures,
+                all_formats=all_formats,
+                external_llm=ext_llm,
+                settings=settings,
+            )
+        elif fmt == InputFormat.DOCX:
+            convert_docx(
+                docx_path=doc_path,
+                output_dir=out_dir,
+                vlm=not no_vlm,
+                vlm_preset=vlm_preset.value,
+                figures=not no_figures,
+                all_formats=all_formats,
+                external_llm=ext_llm,
+                settings=settings,
+            )
+        elif fmt == InputFormat.XLSX:
+            convert_xlsx(xlsx_path=doc_path, output_dir=out_dir, all_formats=all_formats)
+        elif fmt == InputFormat.IMAGE:
             if not ext_llm:
                 console.print("[red]Image conversion requires --use-external-llm[/red]")
                 raise typer.Exit(1)
             provider, model = ext_llm
             md = convert_with_external_llm(doc_path, fmt, provider, model, settings)
-            write_markdown_output(md, output, auto_output, doc_name)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "document.md").write_text(md)
+            _print_output_summary(out_dir)
+        elif fmt == InputFormat.PDF and ext_llm:
+            provider, model = ext_llm
+            md = convert_with_external_llm(doc_path, fmt, provider, model, settings)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "document.md").write_text(md)
+            _print_output_summary(out_dir)
         else:
-            md = convert_native(doc_path, fmt)
-            write_markdown_output(md, output, auto_output, doc_name)
+            console.print(f"[red]Unsupported format: {fmt}[/red]")
+            raise typer.Exit(1)
     finally:
         if tmp_file and tmp_file.exists():
             tmp_file.unlink()
@@ -1031,9 +1171,10 @@ def main(  # noqa: PLR0912, PLR0915
 # ── Audio/Video processing ───────────────────────────────────────────────────
 
 
-def _process_audio(
-    audio_path: Path,
-    output: str | None,
+def _process_media_to_dir(
+    media_path: Path,
+    output_dir: Path,
+    media_type: str,
     meeting: str | None,
     analyze: bool,
     instructions: str | None,
@@ -1041,77 +1182,54 @@ def _process_audio(
     use_external_llm: str | None,
     settings: Settings,
 ) -> None:
-    """Transcribe audio and optionally analyze."""
-    from audio import build_analysis_prompt as audio_analysis_prompt  # noqa: PLC0415
-    from audio import build_transcription_prompt  # noqa: PLC0415
+    """Process audio or video into a _docling/ directory with document.md + optional analysis.md."""
     from media_llm import process_media  # noqa: PLC0415
 
+    if _check_cache(output_dir, force):
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
     provider, model, api_key = _resolve_media_llm(use_external_llm, settings)
 
-    transcript_path = Path(output) if output else audio_path.parent / f"{audio_path.stem}_transcription.md"
-    if not _check_cache(transcript_path, force):
+    # Main conversion (transcription for audio, extraction for video)
+    if media_type == "audio":
+        from audio import build_transcription_prompt  # noqa: PLC0415
+
         prompt, system = build_transcription_prompt(meeting)
-        with trace_span("audio.transcribe", file=audio_path.name, provider=provider):
-            md = process_media(audio_path, provider, model, prompt, api_key, system_prompt=system)
-        if meeting:
-            md = f"# {meeting}\n\n{md}"
-        transcript_path.write_text(md)
-        console.print(f"[green]Transcription:[/green] {transcript_path}")
+        span_name = "audio.transcribe"
+    else:
+        from video import build_extraction_prompt  # noqa: PLC0415
 
-    if analyze:
-        analysis_path = transcript_path.parent / f"{audio_path.stem}_analysis.md"
-        if not _check_cache(analysis_path, force):
-            if instructions:
-                prompt = instructions
-                system = f"Meeting context: {meeting}\n\n{instructions}" if meeting else instructions
-            else:
-                prompt, system = audio_analysis_prompt(meeting)
-            with trace_span("audio.analyze", file=audio_path.name, provider=provider):
-                md = process_media(audio_path, provider, model, prompt, api_key, system_prompt=system)
-            if meeting:
-                md = f"# {meeting}\n\n{md}"
-            analysis_path.write_text(md)
-            console.print(f"[green]Analysis:[/green] {analysis_path}")
-
-
-def _process_video(
-    video_path: Path,
-    output: str | None,
-    meeting: str | None,
-    analyze: bool,
-    instructions: str | None,
-    force: bool,
-    use_external_llm: str | None,
-    settings: Settings,
-) -> None:
-    """Extract video content and optionally analyze."""
-    from media_llm import process_media  # noqa: PLC0415
-    from video import build_analysis_prompt as video_analysis_prompt  # noqa: PLC0415
-    from video import build_extraction_prompt  # noqa: PLC0415
-
-    provider, model, api_key = _resolve_media_llm(use_external_llm, settings)
-
-    extract_path = Path(output) if output else video_path.parent / f"{video_path.stem}_extraction.md"
-    if not _check_cache(extract_path, force):
         prompt, system = build_extraction_prompt(meeting)
-        with trace_span("video.extract", file=video_path.name, provider=provider):
-            md = process_media(video_path, provider, model, prompt, api_key, system_prompt=system)
-        if meeting:
-            md = f"# {meeting}\n\n{md}"
-        extract_path.write_text(md)
-        console.print(f"[green]Extraction:[/green] {extract_path}")
+        span_name = "video.extract"
 
+    with trace_span(span_name, file=media_path.name, provider=provider):
+        md = process_media(media_path, provider, model, prompt, api_key, system_prompt=system)
+    if meeting:
+        md = f"# {meeting}\n\n{md}"
+    (output_dir / "document.md").write_text(md)
+
+    extra: list[str] = []
+
+    # Analysis (optional second pass)
     if analyze:
-        analysis_path = extract_path.parent / f"{video_path.stem}_analysis.md"
-        if not _check_cache(analysis_path, force):
-            if instructions:
-                prompt = instructions
-                system = f"Video context: {meeting}\n\n{instructions}" if meeting else instructions
-            else:
-                prompt, system = video_analysis_prompt(meeting)
-            with trace_span("video.analyze", file=video_path.name, provider=provider):
-                md = process_media(video_path, provider, model, prompt, api_key, system_prompt=system)
-            if meeting:
-                md = f"# {meeting}\n\n{md}"
-            analysis_path.write_text(md)
-            console.print(f"[green]Analysis:[/green] {analysis_path}")
+        if instructions:
+            a_prompt = instructions
+            a_system = f"Context: {meeting}\n\n{instructions}" if meeting else instructions
+        elif media_type == "audio":
+            from audio import build_analysis_prompt as audio_analysis  # noqa: PLC0415
+
+            a_prompt, a_system = audio_analysis(meeting)
+        else:
+            from video import build_analysis_prompt as video_analysis  # noqa: PLC0415
+
+            a_prompt, a_system = video_analysis(meeting)
+
+        with trace_span(f"{media_type}.analyze", file=media_path.name, provider=provider):
+            analysis_md = process_media(media_path, provider, model, a_prompt, api_key, system_prompt=a_system)
+        if meeting:
+            analysis_md = f"# {meeting}\n\n{analysis_md}"
+        (output_dir / "analysis.md").write_text(analysis_md)
+        extra.append("analysis.md")
+
+    _print_output_summary(output_dir, extra_files=extra)
