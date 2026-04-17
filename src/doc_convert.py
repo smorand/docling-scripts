@@ -889,6 +889,12 @@ def main(  # noqa: PLR0912, PLR0915
         "--meeting",
         help="Meeting name or context (audio/video)",
     ),
+    instructions: str | None = typer.Option(
+        None,
+        "-i",
+        "--instructions",
+        help="Custom instructions for analysis (audio/video --analyze)",
+    ),
     force: bool = typer.Option(
         False,
         "-f",
@@ -928,7 +934,7 @@ def main(  # noqa: PLR0912, PLR0915
         configure_tracing("doc-convert")
         settings = Settings()
         recorded = record_audio(label=meeting)
-        _process_audio(recorded, output, meeting, analyze, force, use_external_llm, settings)
+        _process_audio(recorded, output, meeting, analyze, instructions, force, use_external_llm, settings)
         raise typer.Exit()
 
     if document is None:
@@ -949,7 +955,7 @@ def main(  # noqa: PLR0912, PLR0915
 
         downloaded = download_youtube(document)
         try:
-            _process_video(downloaded, output, meeting, analyze, force, use_external_llm, settings)
+            _process_video(downloaded, output, meeting, analyze, instructions, force, use_external_llm, settings)
         finally:
             downloaded.unlink(missing_ok=True)
         raise typer.Exit()
@@ -971,10 +977,10 @@ def main(  # noqa: PLR0912, PLR0915
 
             ext = doc_path.suffix.lower()
             if is_audio_ext(ext):
-                _process_audio(doc_path, output, meeting, analyze, force, use_external_llm, settings)
+                _process_audio(doc_path, output, meeting, analyze, instructions, force, use_external_llm, settings)
                 raise typer.Exit()
             if is_video_ext(ext):
-                _process_video(doc_path, output, meeting, analyze, force, use_external_llm, settings)
+                _process_video(doc_path, output, meeting, analyze, instructions, force, use_external_llm, settings)
                 raise typer.Exit()
 
             fmt = detect_format(doc_path)
@@ -1030,6 +1036,7 @@ def _process_audio(
     output: str | None,
     meeting: str | None,
     analyze: bool,
+    instructions: str | None,
     force: bool,
     use_external_llm: str | None,
     settings: Settings,
@@ -1041,7 +1048,6 @@ def _process_audio(
 
     provider, model, api_key = _resolve_media_llm(use_external_llm, settings)
 
-    # Transcription
     transcript_path = Path(output) if output else audio_path.parent / f"{audio_path.stem}_transcription.md"
     if not _check_cache(transcript_path, force):
         prompt, system = build_transcription_prompt(meeting)
@@ -1055,7 +1061,11 @@ def _process_audio(
     if analyze:
         analysis_path = transcript_path.parent / f"{audio_path.stem}_analysis.md"
         if not _check_cache(analysis_path, force):
-            prompt, system = audio_analysis_prompt(meeting)
+            if instructions:
+                prompt = instructions
+                system = f"Meeting context: {meeting}\n\n{instructions}" if meeting else instructions
+            else:
+                prompt, system = audio_analysis_prompt(meeting)
             with trace_span("audio.analyze", file=audio_path.name, provider=provider):
                 md = process_media(audio_path, provider, model, prompt, api_key, system_prompt=system)
             if meeting:
@@ -1069,6 +1079,7 @@ def _process_video(
     output: str | None,
     meeting: str | None,
     analyze: bool,
+    instructions: str | None,
     force: bool,
     use_external_llm: str | None,
     settings: Settings,
@@ -1080,7 +1091,6 @@ def _process_video(
 
     provider, model, api_key = _resolve_media_llm(use_external_llm, settings)
 
-    # Extraction
     extract_path = Path(output) if output else video_path.parent / f"{video_path.stem}_extraction.md"
     if not _check_cache(extract_path, force):
         prompt, system = build_extraction_prompt(meeting)
@@ -1094,7 +1104,11 @@ def _process_video(
     if analyze:
         analysis_path = extract_path.parent / f"{video_path.stem}_analysis.md"
         if not _check_cache(analysis_path, force):
-            prompt, system = video_analysis_prompt(meeting)
+            if instructions:
+                prompt = instructions
+                system = f"Video context: {meeting}\n\n{instructions}" if meeting else instructions
+            else:
+                prompt, system = video_analysis_prompt(meeting)
             with trace_span("video.analyze", file=video_path.name, provider=provider):
                 md = process_media(video_path, provider, model, prompt, api_key, system_prompt=system)
             if meeting:
