@@ -34,6 +34,7 @@ from docling.document_converter import (
     FormatOption,
     ImageFormatOption,
     PdfFormatOption,
+    PowerpointFormatOption,
     WordFormatOption,
 )
 from docling.pipeline.vlm_pipeline import VlmPipeline
@@ -63,12 +64,24 @@ class VlmPreset(str, Enum):
     qwen = "qwen"
 
 
+PRESET_REPO_IDS: dict[str, str] = {
+    "smolvlm": "HuggingFaceTB/SmolVLM-256M-Instruct",
+    "granite_vision": "ibm-granite/granite-vision-3.3-2b",
+    "pixtral": "mistral-community/pixtral-12b",
+    "qwen": "Qwen/Qwen2.5-VL-3B-Instruct",
+}
+
+
 # ── Format detection ──────────────────────────────────────────────────────────
 
 EXT_TO_FORMAT: dict[str, InputFormat] = {
     ".pdf": InputFormat.PDF,
     ".docx": InputFormat.DOCX,
     ".xlsx": InputFormat.XLSX,
+    ".pptx": InputFormat.PPTX,
+    ".pptm": InputFormat.PPTX,
+    ".potx": InputFormat.PPTX,
+    ".ppsx": InputFormat.PPTX,
     ".jpg": InputFormat.IMAGE,
     ".jpeg": InputFormat.IMAGE,
     ".png": InputFormat.IMAGE,
@@ -288,6 +301,7 @@ def build_page_annotated_markdown(  # noqa: PLR0912
     figure_map: dict[str, str],
     title: str = "",
     pdf_meta: dict[str, str] | None = None,
+    figure_descriptions: dict[str, str] | None = None,
 ) -> str:
     """Build markdown with page number annotations."""
     lines: list[str] = []
@@ -322,7 +336,7 @@ def build_page_annotated_markdown(  # noqa: PLR0912
             lines.append("")
         elif isinstance(item, PictureItem):
             caption = item.caption_text(doc)
-            description = get_vlm_description(item)
+            description = (figure_descriptions or {}).get(item.self_ref, "") or get_vlm_description(item)
             fig_path = figure_map.get(item.self_ref, "")
 
             lines.append(f"[Figure: {caption}]" if caption else "[Figure]")
@@ -375,6 +389,92 @@ def build_images_catalog(doc: object, figure_map: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+# ── PPTX image extraction ────────────────────────────────────────────────────
+
+
+def extract_pptx_images(pptx_path: Path, output_dir: Path) -> dict[int, list[Path]]:
+    """Extract images from PPTX using python-pptx with group recursion.
+
+    Returns a dict mapping slide number (1-based) to list of extracted image paths.
+    """
+    from pptx import Presentation as PptxPresentation  # noqa: PLC0415
+    from pptx.enum.shapes import MSO_SHAPE_TYPE  # noqa: PLC0415
+
+    prs = PptxPresentation(str(pptx_path))
+    fig_dir = output_dir / "figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    images: dict[int, list[Path]] = {}
+    fig_count = 0
+
+    def process_shape(shape: object, slide_num: int) -> None:
+        nonlocal fig_count
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:  # type: ignore[attr-defined]
+            for grouped in shape.shapes:  # type: ignore[attr-defined]
+                process_shape(grouped, slide_num)
+        elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:  # type: ignore[attr-defined]
+            try:
+                image = shape.image  # type: ignore[attr-defined]
+                content_type = image.content_type
+                ext = content_type.split("/")[-1]
+                if ext == "jpeg":
+                    ext = "jpg"
+                elif ext not in ("png", "jpg", "gif", "bmp", "tiff", "webp"):
+                    ext = "png"
+                filename = f"slide{slide_num}_fig{fig_count}.{ext}"
+                filepath = fig_dir / filename
+                filepath.write_bytes(image.blob)
+                images.setdefault(slide_num, []).append(filepath)
+                fig_count += 1
+            except Exception:
+                logger.warning("Failed to extract image from slide %d", slide_num)
+
+    for slide_idx, slide in enumerate(prs.slides):
+        for shape in slide.shapes:
+            process_shape(shape, slide_idx + 1)
+
+    logger.info("Extracted %d image(s) from %d slide(s)", fig_count, len(prs.slides))
+    return images
+
+
+def describe_images_with_vlm(image_paths: list[Path], vlm_preset: str, models_path: Path) -> list[str]:
+    """Describe images using local VLM engine (offline, uses models_path)."""
+    from docling.datamodel.accelerator_options import AcceleratorOptions  # noqa: PLC0415
+    from docling.models.stages.picture_description.picture_description_vlm_engine_model import (  # noqa: PLC0415
+        PictureDescriptionVlmEngineModel,
+    )
+    from PIL import Image  # noqa: PLC0415
+
+    if not models_path.exists():
+        console.print(f"[red]Models directory not found: {models_path}[/red]")
+        console.print("Run [bold]doc-convert download-models[/bold] first.")
+        raise typer.Exit(1)
+
+    options = PictureDescriptionVlmEngineOptions.from_preset(vlm_preset)
+    model = PictureDescriptionVlmEngineModel(
+        enabled=True,
+        enable_remote_services=False,
+        artifacts_path=str(models_path),
+        options=options,
+        accelerator_options=AcceleratorOptions(),
+    )
+
+    logger.info("Describing %d image(s) with local VLM (%s)", len(image_paths), vlm_preset)
+    pil_images = [Image.open(p) for p in image_paths]
+    raw = list(model._annotate_images(pil_images))
+    return [re.sub(r"<end_of_utteranc\w*>?", "", d).strip() for d in raw]
+
+
+def describe_images_with_gemini(image_paths: list[Path], settings: Settings) -> list[str]:
+    """Describe images using Gemini API."""
+    logger.info("Describing %d image(s) with Gemini", len(image_paths))
+    descriptions: list[str] = []
+    for img_path in image_paths:
+        md = convert_with_gemini(img_path, InputFormat.IMAGE, settings)
+        descriptions.append(md.strip())
+    return descriptions
+
+
 # ── Conversion functions ──────────────────────────────────────────────────────
 
 
@@ -387,6 +487,7 @@ def convert_pdf_local(
     vlm_preset: str,
     figures: bool,
     all_formats: bool,
+    models_path: Path,
 ) -> None:
     """Full PDF extraction with local models."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -398,6 +499,7 @@ def convert_pdf_local(
         generate_picture_images=figures,
         do_picture_description=vlm and figures,
         do_picture_classification=figures,
+        artifacts_path=str(models_path),
     )
 
     if vlm:
@@ -513,6 +615,116 @@ def convert_native(doc_path: Path, fmt: InputFormat) -> str:
     return result.document.export_to_markdown()  # type: ignore[no-any-return]
 
 
+def _map_pptx_images_to_items(
+    doc: object,
+    slide_images: dict[int, list[Path]],
+) -> tuple[dict[str, str], list[Path], list[str]]:
+    """Map python-pptx extracted images to Docling PictureItems by slide + order.
+
+    Returns (figure_map, image_paths, item_refs) where:
+      figure_map: {item.self_ref: relative_path}
+      image_paths: ordered list of image file paths
+      item_refs: ordered list of item self_refs (parallel to image_paths)
+    """
+    figure_map: dict[str, str] = {}
+    image_paths: list[Path] = []
+    item_refs: list[str] = []
+    picture_idx_per_slide: dict[int, int] = {}
+
+    for item, _ in doc.iterate_items():  # type: ignore[attr-defined]
+        if isinstance(item, PictureItem):
+            prov = getattr(item, "prov", None)
+            slide_num = prov[0].page_no if prov else 0
+            idx = picture_idx_per_slide.get(slide_num, 0)
+            picture_idx_per_slide[slide_num] = idx + 1
+
+            slide_imgs = slide_images.get(slide_num, [])
+            if idx < len(slide_imgs):
+                figure_map[item.self_ref] = f"figures/{slide_imgs[idx].name}"
+                image_paths.append(slide_imgs[idx])
+                item_refs.append(item.self_ref)
+
+    return figure_map, image_paths, item_refs
+
+
+def convert_pptx(  # noqa: PLR0912
+    pptx_path: Path,
+    output_dir: Path,
+    *,
+    vlm: bool,
+    vlm_preset: str,
+    figures: bool,
+    all_formats: bool,
+    gemini: bool,
+    settings: Settings,
+) -> None:
+    """PPTX conversion: Docling native text + python-pptx images + VLM descriptions."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    converter = DocumentConverter(
+        allowed_formats=[InputFormat.PPTX],
+        format_options={InputFormat.PPTX: PowerpointFormatOption()},
+    )
+
+    with trace_span("docling.convert_pptx", file=pptx_path.name):
+        logger.info("Converting %s (PPTX native)", pptx_path.name)
+        result = converter.convert(str(pptx_path))
+        logger.info("Status: %s", result.status)
+
+    doc = result.document
+
+    figure_map: dict[str, str] = {}
+    figure_descriptions: dict[str, str] = {}
+    all_image_paths: list[Path] = []
+
+    if figures:
+        slide_images = extract_pptx_images(pptx_path, output_dir)
+        figure_map, all_image_paths, item_refs = _map_pptx_images_to_items(doc, slide_images)
+
+        if vlm and all_image_paths:
+            with trace_span("vlm.describe_pptx_images", count=len(all_image_paths)):
+                if gemini:
+                    _require_gemini_key(settings)
+                    desc_list = describe_images_with_gemini(all_image_paths, settings)
+                else:
+                    desc_list = describe_images_with_vlm(all_image_paths, vlm_preset, Path(settings.models_path))
+                for ref, desc in zip(item_refs, desc_list, strict=True):
+                    if desc:
+                        figure_descriptions[ref] = desc
+
+    title = ""
+    for t in doc.texts:
+        if t.label == DocItemLabel.TITLE:
+            title = t.text
+            break
+
+    page_md = build_page_annotated_markdown(doc, figure_map, title, figure_descriptions=figure_descriptions)
+    (output_dir / "document.md").write_text(page_md)
+
+    fig_count = len(all_image_paths)
+    if fig_count > 0:
+        catalog = build_images_catalog(doc, figure_map)
+        (output_dir / "images.md").write_text(catalog)
+
+    if all_formats:
+        (output_dir / "output.md").write_text(doc.export_to_markdown())
+        (output_dir / "output.json").write_text(json.dumps(doc.export_to_dict(), indent=2, default=str))
+        (output_dir / "output.txt").write_text(doc.export_to_text())
+        (output_dir / "output.html").write_text(doc.export_to_html())
+
+    if title:
+        logger.info("Title: %s", title)
+    console.print(f"[green]Output:[/green] {output_dir}/")
+    console.print("  document.md  (slide-annotated markdown)")
+    if fig_count > 0:
+        console.print("  images.md    (image catalog)")
+        console.print(f"  figures/     ({fig_count} figure(s))")
+        if vlm:
+            console.print(f"  VLM descriptions: {len(figure_descriptions)}/{fig_count}")
+    if all_formats:
+        console.print("  output.*     (md, html, json, txt)")
+
+
 # ── Output helpers ────────────────────────────────────────────────────────────
 
 
@@ -531,30 +743,62 @@ def write_markdown_output(md: str, output: str | None, auto_output: bool, name: 
         typer.echo(md)
 
 
-# ── CLI command ───────────────────────────────────────────────────────────────
+# ── CLI commands ─────────────────────────────────────────────────────────────
+
+
+@app.command()
+def download_models(
+    preset: VlmPreset = typer.Argument(
+        VlmPreset.granite_vision,
+        help="VLM preset to download",
+    ),
+    models_path: str | None = typer.Option(
+        None,
+        "--models-path",
+        help="Override MODELS_PATH (default: ~/.cache/models)",
+    ),
+) -> None:
+    """Pre-download VLM model for offline use."""
+    from docling.models.utils.hf_model_download import download_hf_model  # noqa: PLC0415
+
+    settings = Settings()
+    dest = Path(models_path or settings.models_path)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    repo_id = PRESET_REPO_IDS[preset.value]
+    cache_folder = repo_id.replace("/", "--")
+    target = dest / cache_folder
+
+    if target.exists():
+        console.print(f"[yellow]Already downloaded:[/yellow] {target}")
+        return
+
+    console.print(f"Downloading [bold]{repo_id}[/bold] to {dest}/")
+    download_hf_model(repo_id=repo_id, local_dir=target, progress=True)
+    console.print(f"[green]Done.[/green] Model available at {target}")
 
 
 @app.command()
 def convert(
     document: str = typer.Argument(
-        help="File path (PDF, image, DOCX, XLSX) or Google Docs/Sheets URL",
+        help="File path (PDF, image, DOCX, XLSX, PPTX) or Google Docs/Sheets URL",
     ),
     output: str | None = typer.Option(
         None,
         "-o",
         "--output",
-        help="Output directory (PDF local) or file path (other formats)",
+        help="Output directory (PDF/PPTX local) or file path (other formats)",
     ),
     auto_output: bool = typer.Option(
         False,
         "-O",
         "--auto-output",
-        help="Auto-name: <stem>_docling/ for PDF local, <stem>.md for others",
+        help="Auto-name: <stem>_docling/ for PDF/PPTX local, <stem>.md for others",
     ),
     gemini: bool = typer.Option(
         False,
         "--gemini",
-        help="Use Gemini API instead of local models (PDF and images)",
+        help="Use Gemini API instead of local models (PDF, PPTX images, images)",
     ),
     vlm_preset: VlmPreset = typer.Option(
         VlmPreset.smolvlm,
@@ -569,7 +813,7 @@ def convert(
     no_vlm: bool = typer.Option(
         False,
         "--no-vlm",
-        help="Disable VLM picture descriptions (local PDF only)",
+        help="Disable VLM picture descriptions (PDF, PPTX)",
     ),
     no_figures: bool = typer.Option(
         False,
@@ -579,7 +823,7 @@ def convert(
     all_formats: bool = typer.Option(
         False,
         "--all",
-        help="Generate all export formats (local PDF: md, html, json, txt)",
+        help="Generate all export formats (PDF/PPTX: md, html, json, txt)",
     ),
     verbose: int = typer.Option(
         0,
@@ -599,6 +843,7 @@ def convert(
     setup_logging(verbose=verbose, quiet=quiet)
     configure_tracing("doc-convert")
     settings = Settings()
+    models = Path(settings.models_path)
 
     tmp_file: Path | None = None
     try:
@@ -624,6 +869,19 @@ def convert(
                 vlm_preset=vlm_preset.value,
                 figures=not no_figures,
                 all_formats=all_formats,
+                models_path=models,
+            )
+        elif fmt == InputFormat.PPTX:
+            out_dir = Path(output) if output else doc_path.parent / f"{doc_path.stem}_docling"
+            convert_pptx(
+                pptx_path=doc_path,
+                output_dir=out_dir,
+                vlm=not no_vlm,
+                vlm_preset=vlm_preset.value,
+                figures=not no_figures,
+                all_formats=all_formats,
+                gemini=gemini,
+                settings=settings,
             )
         elif (fmt in (InputFormat.PDF, InputFormat.IMAGE) and gemini) or fmt == InputFormat.IMAGE:
             md = convert_with_gemini(doc_path, fmt, settings)

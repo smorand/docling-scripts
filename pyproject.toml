@@ -20,6 +20,7 @@ dependencies = [
     "pydantic-settings>=2.7.0",
     "opentelemetry-api>=1.29.0",
     "opentelemetry-sdk>=1.29.0",
+    "python-pptx>=1.0.0",
 ]
 
 [dependency-groups]
@@ -72,6 +73,7 @@ select = [
 ignore = [
     "E501",    # Line too long (handled by formatter)
     "PLR0913", # Too many arguments
+    "SLF001",  # Private member access (needed for Docling VLM engine _annotate_images)
     "B008",    # Do not perform function call in argument defaults (needed for Typer)
 ]
 
@@ -109,6 +111,7 @@ module = [
     "pypdfium2.*",
     "google.*",
     "opentelemetry.*",
+    "pptx.*",
 ]
 ignore_missing_imports = true
 

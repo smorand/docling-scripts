@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+DEFAULT_MODELS_PATH = Path.home() / ".cache" / "models"
 
 
 class Settings(BaseSettings):
     """Configuration for doc-convert.
 
     Environment variables (no prefix, standard names):
+        MODELS_PATH          - Local model cache directory (default: ~/.cache/models)
         GEMINI_API_KEY       - Gemini API key for VLM conversion
         GOOGLE_CREDENTIALS   - Path to Google credentials JSON
     """
 
+    models_path: str = str(DEFAULT_MODELS_PATH)
     gemini_api_key: str = ""
     google_credentials: str = ""
     gemini_model: str = "gemini-3-flash-preview"
