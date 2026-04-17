@@ -2,7 +2,7 @@
 
 Unified document converter powered by [Docling](https://github.com/docling-project/docling).
 
-Converts PDF, images, DOCX, XLSX, PPTX, and Google Docs/Sheets to structured markdown.
+Converts PDF, images, DOCX, XLSX, PPTX, audio, and video to structured markdown.
 
 ## Installation
 
@@ -12,21 +12,11 @@ cd docling-scripts
 make install    # Installs doc-convert as isolated uv tool in ~/.local/bin/
 ```
 
-## Model Setup (offline)
-
-VLM models must be pre-downloaded before use. No network calls at runtime.
+## Model Setup (offline, for document VLM)
 
 ```bash
-# Download default model (smolvlm, ~256M params)
-doc-convert download-models
-
-# Download a specific preset
-doc-convert download-models granite_vision
-doc-convert download-models pixtral
-doc-convert download-models qwen
-
-# Custom models directory (default: ~/.cache/models)
-doc-convert download-models --models-path /path/to/models
+doc-convert --download-models                           # download smolvlm (default)
+doc-convert --download-models --vlm-preset granite_vision  # specific preset
 ```
 
 Models are stored in `~/.cache/models/` (override with `MODELS_PATH` env var).
@@ -35,33 +25,44 @@ Models are stored in `~/.cache/models/` (override with `MODELS_PATH` env var).
 
 ```bash
 # PDF: full local extraction (figures, tables, OCR, page annotations)
-doc-convert convert document.pdf                       # output to <stem>_docling/
-doc-convert convert document.pdf -o /tmp/output        # custom output directory
-doc-convert convert document.pdf --no-vlm              # skip picture descriptions
-doc-convert convert document.pdf --vlm-preset granite_vision
-doc-convert convert document.pdf --all                 # + html, json, txt exports
+doc-convert document.pdf                                # output to <stem>_docling/
+doc-convert document.pdf -o /tmp/output                 # custom output directory
+doc-convert document.pdf --no-vlm                       # skip picture descriptions
+doc-convert document.pdf --all                          # + html, json, txt exports
 
 # PDF via external LLM (quick markdown, no figure extraction)
-doc-convert convert document.pdf --use-external-llm google/gemini-3-flash-preview
-doc-convert convert document.pdf --use-external-llm openrouter/google/gemini-3-pro-preview
+doc-convert document.pdf --use-external-llm google/gemini-2.5-flash
 
 # PPTX: native text + image extraction with VLM descriptions
-doc-convert convert slides.pptx                        # output to <stem>_docling/
-doc-convert convert slides.pptx --use-external-llm google/gemini-3-flash-preview
-doc-convert convert slides.pptx --no-vlm               # skip image descriptions
-doc-convert convert slides.pptx --no-figures            # text + tables only
+doc-convert slides.pptx                                 # output to <stem>_docling/
+doc-convert slides.pptx --use-external-llm openrouter/google/gemini-2.5-flash
+doc-convert slides.pptx --no-vlm                        # skip image descriptions
+
+# Audio: transcription (requires external LLM, default: openrouter/google/gemini-2.5-flash)
+doc-convert meeting.ogg                                 # transcription to <stem>_transcription.md
+doc-convert meeting.ogg --analyze                       # + structured analysis
+doc-convert meeting.ogg -m "Weekly standup"             # with meeting context
+doc-convert --start-audio                               # record from mic, Ctrl+C to transcribe
+doc-convert --start-audio --analyze -m "Standup"        # record + transcribe + analyze
+
+# Video: content extraction (requires external LLM)
+doc-convert video.mp4                                   # extraction to <stem>_extraction.md
+doc-convert video.mp4 --analyze                         # + executive summary
+doc-convert "https://youtube.com/watch?v=..."           # YouTube via yt-dlp
 
 # Images (requires external LLM)
-doc-convert convert scan.png --use-external-llm google/gemini-3-flash-preview
-doc-convert convert scan.png --use-external-llm openrouter/google/gemini-3-pro-preview -O
+doc-convert scan.png --use-external-llm google/gemini-2.5-flash
 
 # DOCX / XLSX (native parsers)
-doc-convert convert document.docx                      # output to stdout
-doc-convert convert document.docx -o out.md            # output to file
+doc-convert document.docx                               # output to stdout
+doc-convert document.docx -o out.md                     # output to file
 
 # Google Docs / Sheets
-doc-convert convert "https://docs.google.com/document/d/DOC_ID/edit"
-doc-convert convert "https://docs.google.com/spreadsheets/d/SHEET_ID/edit"
+doc-convert "https://docs.google.com/document/d/DOC_ID/edit"
+
+# Cache: skip conversion if output exists (use -f to force)
+doc-convert document.pdf                                # skips if output exists
+doc-convert document.pdf -f                             # force re-conversion
 ```
 
 ### External LLM Providers
@@ -73,28 +74,14 @@ doc-convert convert "https://docs.google.com/spreadsheets/d/SHEET_ID/edit"
 | Google GenAI | `google/<model>` | `GOOGLE_API_KEY` |
 | OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` |
 
-Examples: `google/gemini-3-flash-preview`, `openrouter/google/gemini-3-pro-preview`, `openrouter/anthropic/claude-sonnet-4`
+Audio and video default to `openrouter/google/gemini-2.5-flash` if `--use-external-llm` is not specified.
 
-### PDF/PPTX Output Structure
+### System Dependencies
 
-```
-document_docling/
-├── document.md    # Page/slide-annotated markdown with metadata
-├── images.md      # Image catalog (type, caption, VLM description)
-└── figures/       # Extracted images as PNG
-```
-
-With `--all`, additional exports: `output.md`, `output_embedded.md`, `output.html`, `output.json`, `output.txt`.
-
-### PPTX Conversion
-
-PPTX uses a hybrid approach:
-- **Docling native** for structured text, tables, and lists
-- **python-pptx** for robust image extraction (with recursion into grouped shapes)
-- **Local VLM** (smolvlm by default) for image descriptions (offline)
-- **External LLM** (`--use-external-llm`) as alternative for image descriptions
-
-Note: Charts and SmartArt are not extracted (they require a rendering engine). For chart-heavy presentations, consider converting to PDF first via LibreOffice.
+| Tool | Required for | Install |
+|---|---|---|
+| sox | `--start-audio` (recording) | `brew install sox` |
+| yt-dlp | YouTube URLs | `brew install yt-dlp` |
 
 ## Environment Variables
 

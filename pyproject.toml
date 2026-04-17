@@ -81,7 +81,7 @@ ignore = [
 "tests/*" = ["ARG", "PLR2004"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["doc_convert", "config", "logging_config", "tracing"]
+known-first-party = ["doc_convert", "config", "logging_config", "tracing", "media_llm", "audio", "video"]
 
 [tool.ruff.format]
 quote-style = "double"

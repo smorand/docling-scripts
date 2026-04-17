@@ -2,19 +2,21 @@
 
 ## Overview
 
-Unified document converter (PDF, images, DOCX, XLSX, PPTX, Google Docs/Sheets) powered by Docling.
+Unified document converter (PDF, images, DOCX, XLSX, PPTX, audio, video, Google Docs/Sheets) powered by Docling.
 Tech stack: Python 3.10+, Typer, Docling, python-pptx, httpx, pydantic-settings, Rich, OpenTelemetry.
 
 ## Key Commands
 
 ```
 make sync          # Install dependencies
-make run ARGS='convert document.pdf'  # Run via uv
+make run ARGS='document.pdf'  # Run via uv
 make check         # Full quality gate (lint, format, typecheck, security, tests)
 make install       # Install as uv tool (system-wide: doc-convert)
 make uninstall     # Remove uv tool
-doc-convert download-models              # Pre-download default VLM (smolvlm)
-doc-convert convert document.pdf         # Convert a document
+doc-convert --download-models              # Pre-download default VLM (smolvlm)
+doc-convert document.pdf                   # Convert a document
+doc-convert --start-audio                  # Record + transcribe
+doc-convert video.mp4                      # Extract video content
 ```
 
 ## Project Structure
@@ -23,6 +25,9 @@ doc-convert convert document.pdf         # Convert a document
 src/
 ├── doc_convert.py    # Typer CLI entry point + conversion logic
 ├── config.py         # Settings (pydantic-settings)
+├── media_llm.py      # Direct LLM client for audio/video (Gemini Files API + OpenRouter)
+├── audio.py          # Audio recording (sox) + transcription/analysis prompts
+├── video.py          # Video processing + YouTube download (yt-dlp) + prompts
 ├── logging_config.py # Rich logging setup
 ├── tracing.py        # OpenTelemetry tracing
 └── py.typed          # PEP 561 marker
@@ -34,8 +39,10 @@ src/
 - HTTP client: httpx (not requests)
 - Config: pydantic-settings (not os.environ)
 - Logging: Rich + logging module (not print)
-- Four conversion paths: PDF local (StandardPdfPipeline), PDF/Image external LLM (VlmPipeline via google/ or openrouter/), PPTX (Docling native + python-pptx images + VLM), DOCX/XLSX native
-- Offline by default: VLM models pre-downloaded to ~/.cache/models (MODELS_PATH env var), no network calls at runtime
+- Six conversion paths: PDF local, PDF/Image external LLM, PPTX (Docling + python-pptx + VLM), DOCX/XLSX native, Audio (transcription via external LLM), Video (extraction via external LLM)
+- Offline by default for documents: VLM models pre-downloaded to ~/.cache/models
+- Audio/video require external LLM (default: openrouter/google/gemini-2.5-flash)
+- Cache: skip conversion if output exists, use -f to force
 
 ## Quality Gate
 
