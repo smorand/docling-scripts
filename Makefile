@@ -152,7 +152,7 @@ build: sync
 ## install: Install as a uv tool (available system-wide)
 install:
 	@echo "Installing $(PROJECT_NAME) as uv tool..."
-	@uv tool install . --reinstall
+	@uv tool install . --reinstall --force
 	@echo "Install complete! Run 'doc-convert' from anywhere."
 
 ## uninstall: Remove uv tool
