@@ -107,6 +107,74 @@ class BaseConverter(ABC):
 
         return figure_descriptions
 
+    def run_analysis(
+        self,
+        use_external_llm: str | None,
+        instructions: str | None = None,
+        meeting: str | None = None,
+    ) -> bool:
+        """Run LLM analysis on document.md, write analysis.md. Returns True if analysis was written."""
+        import httpx  # noqa: PLC0415
+
+        from doc_convert.providers import resolve_media_llm  # noqa: PLC0415
+        from tracing import trace_span  # noqa: PLC0415
+
+        doc_md_path = self.output_dir / "document.md"
+        if not doc_md_path.exists():
+            return False
+
+        doc_content = doc_md_path.read_text()
+        provider, model, api_key = resolve_media_llm(use_external_llm, self.options.settings)
+
+        if instructions:
+            system = instructions
+            prompt = f"Analyze this document.\n\n{doc_content}"
+        else:
+            system = (
+                "Analyze this document and produce a structured summary in markdown.\n\n"
+                "Include the following sections:\n\n"
+                "## Executive Summary\n"
+                "Concise overview of the document's key message and purpose\n\n"
+                "## Key Points\n"
+                "Numbered list of the most important points\n\n"
+                "## Decisions / Conclusions\n"
+                "Each decision or conclusion with context\n\n"
+                "## Action Items\n"
+                "| Item | Owner | Priority |\n"
+                "|------|-------|----------|\n\n"
+                "## Next Steps\n"
+                "Follow-ups, outstanding questions\n"
+            )
+            prompt = f"Analyze this document:\n\n{doc_content}"
+
+        if meeting:
+            system = f"Context: {meeting}\n\n{system}"
+
+        from doc_convert.providers import PROVIDER_URLS  # noqa: PLC0415
+
+        with trace_span("document.analyze", file=self.source.name, provider=provider):
+            logger.info("Analyzing %s with %s/%s", self.source.name, provider, model)
+            with httpx.Client(timeout=300.0) as client:
+                resp = client.post(
+                    PROVIDER_URLS[provider],
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": prompt},
+                        ],
+                    },
+                )
+                resp.raise_for_status()
+
+        analysis_md = resp.json()["choices"][0]["message"]["content"]
+        if meeting:
+            analysis_md = f"# {meeting}\n\n{analysis_md}"
+        (self.output_dir / "analysis.md").write_text(analysis_md)
+        logger.info("Analysis written to %s/analysis.md", self.output_dir)
+        return True
+
     def print_summary(
         self,
         fig_count: int = 0,

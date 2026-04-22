@@ -230,8 +230,7 @@ def main(  # noqa: PLR0912, PLR0915
             doc_name = doc_path.stem
 
         out_dir = resolve_output_dir(doc_path, doc_name, output)
-        if check_cache(out_dir, force):
-            raise typer.Exit()
+        cached = check_cache(out_dir, force)
 
         options = ConvertOptions(
             output_dir=out_dir,
@@ -246,29 +245,40 @@ def main(  # noqa: PLR0912, PLR0915
 
         from docling.datamodel.base_models import InputFormat  # noqa: PLC0415
 
+        from doc_convert.base import BaseConverter  # noqa: PLC0415
+
+        converter: BaseConverter | None = None
+
         if fmt == InputFormat.PDF and not ext_llm:
             from doc_convert.converters.pdf import PdfConverter  # noqa: PLC0415
 
-            PdfConverter(doc_path, options).convert()
+            converter = PdfConverter(doc_path, options)
         elif fmt == InputFormat.PPTX:
             from doc_convert.converters.pptx import PptxConverter  # noqa: PLC0415
 
-            PptxConverter(doc_path, options).convert()
+            converter = PptxConverter(doc_path, options)
         elif fmt == InputFormat.DOCX:
             from doc_convert.converters.docx import DocxConverter  # noqa: PLC0415
 
-            DocxConverter(doc_path, options).convert()
+            converter = DocxConverter(doc_path, options)
         elif fmt == InputFormat.XLSX:
             from doc_convert.converters.xlsx import XlsxConverter  # noqa: PLC0415
 
-            XlsxConverter(doc_path, options).convert()
+            converter = XlsxConverter(doc_path, options)
         elif fmt in (InputFormat.IMAGE, InputFormat.PDF):
             from doc_convert.converters.image import ImageConverter  # noqa: PLC0415
 
-            ImageConverter(doc_path, options).convert()
+            converter = ImageConverter(doc_path, options)
         else:
             console.print(f"[red]Unsupported format: {fmt}[/red]")
             raise typer.Exit(1)
+
+        if not cached:
+            converter.convert()
+
+        needs_analysis = analyze and (not (out_dir / "analysis.md").exists() or force)
+        if needs_analysis and converter.run_analysis(use_external_llm, instructions, meeting):
+            console.print("  analysis.md")
     finally:
         if tmp_file and tmp_file.exists():
             tmp_file.unlink()
