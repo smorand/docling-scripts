@@ -32,6 +32,9 @@ def _extract_pptx_images(pptx_path: Path, output_dir: Path) -> dict[int, list[Pa
             try:
                 image = shape.image  # type: ignore[attr-defined]
                 content_type = image.content_type
+                # Skip WMF/EMF (Windows vector formats, not supported by PIL on macOS)
+                if "wmf" in content_type or "emf" in content_type or "x-wmf" in content_type or "x-emf" in content_type:
+                    return
                 ext = content_type.split("/")[-1]
                 if ext == "jpeg":
                     ext = "jpg"

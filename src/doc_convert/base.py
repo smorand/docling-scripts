@@ -75,7 +75,11 @@ class BaseConverter(ABC):
         fig_dir.mkdir(exist_ok=True)
         for item, _ in doc.iterate_items():  # type: ignore[attr-defined]
             if isinstance(item, PictureItem):
-                img = item.get_image(doc)
+                try:
+                    img = item.get_image(doc)
+                except Exception:
+                    logger.warning("Failed to extract image: %s", item.self_ref)
+                    continue
                 if img:
                     filename = f"figure_{fig_count}.png"
                     img.save(fig_dir / filename)

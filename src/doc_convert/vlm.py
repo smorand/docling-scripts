@@ -37,10 +37,33 @@ def describe_images_with_vlm(image_paths: list[Path], vlm_preset: str, models_pa
         accelerator_options=AcceleratorOptions(),
     )
 
-    logger.info("Describing %d image(s) with local VLM (%s)", len(image_paths), vlm_preset)
-    pil_images = [Image.open(p) for p in image_paths]
+    # Filter out unsupported image formats (WMF, EMF) that PIL cannot open on macOS
+    UNSUPPORTED_EXTS = {".wmf", ".emf"}
+    valid_indices: list[int] = []
+    pil_images: list[Image.Image] = []
+    for i, p in enumerate(image_paths):
+        if p.suffix.lower() in UNSUPPORTED_EXTS:
+            logger.warning("Skipping unsupported image format: %s", p.name)
+            continue
+        try:
+            pil_images.append(Image.open(p))
+            valid_indices.append(i)
+        except Exception:
+            logger.warning("Failed to open image: %s", p.name)
+
+    logger.info("Describing %d/%d image(s) with local VLM (%s)", len(pil_images), len(image_paths), vlm_preset)
+
+    if not pil_images:
+        return [""] * len(image_paths)
+
     raw = list(model._annotate_images(pil_images))
-    return [re.sub(r"<end_of_utteranc\w*>?", "", d).strip() for d in raw]
+    cleaned = [re.sub(r"<end_of_utteranc\w*>?", "", d).strip() for d in raw]
+
+    # Rebuild full list with empty strings for skipped images
+    results: list[str] = [""] * len(image_paths)
+    for idx, desc in zip(valid_indices, cleaned, strict=True):
+        results[idx] = desc
+    return results
 
 
 def describe_images_with_external_llm(
