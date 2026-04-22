@@ -92,7 +92,11 @@ class BaseConverter(ABC):
         return figure_map, image_paths, item_refs
 
     def describe_figures(self, image_paths: list[Path], item_refs: list[str], span_name: str) -> dict[str, str]:
-        """Run VLM descriptions on extracted figures. Returns {ref: description}."""
+        """Run VLM descriptions on extracted figures. Returns {ref: description}.
+
+        Deduplicates: if the same image file is referenced by multiple items,
+        it is described only once and the description is reused.
+        """
         from doc_convert.vlm import describe_images_with_external_llm, describe_images_with_vlm  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415
 
@@ -100,15 +104,36 @@ class BaseConverter(ABC):
         if not (self.options.vlm and image_paths):
             return figure_descriptions
 
-        with trace_span(span_name, count=len(image_paths)):
+        # Deduplicate: describe each unique file only once
+        unique_paths: list[Path] = []
+        seen: set[str] = set()
+        for p in image_paths:
+            key = str(p)
+            if key not in seen:
+                unique_paths.append(p)
+                seen.add(key)
+
+        if len(unique_paths) < len(image_paths):
+            logger.info("VLM dedup: %d unique images from %d total", len(unique_paths), len(image_paths))
+
+        with trace_span(span_name, count=len(unique_paths)):
             if self.options.external_llm:
                 provider, model = self.options.external_llm
-                desc_list = describe_images_with_external_llm(image_paths, provider, model, self.options.settings)
+                desc_list = describe_images_with_external_llm(unique_paths, provider, model, self.options.settings)
             else:
-                desc_list = describe_images_with_vlm(image_paths, self.options.vlm_preset, self.options.models_path)
-            for ref, desc in zip(item_refs, desc_list, strict=True):
-                if desc:
-                    figure_descriptions[ref] = desc
+                desc_list = describe_images_with_vlm(unique_paths, self.options.vlm_preset, self.options.models_path)
+
+        # Build path -> description lookup
+        path_to_desc: dict[str, str] = {}
+        for p, desc in zip(unique_paths, desc_list, strict=True):
+            if desc:
+                path_to_desc[str(p)] = desc
+
+        # Map back to item refs (including duplicates)
+        for ref, p in zip(item_refs, image_paths, strict=True):
+            desc = path_to_desc.get(str(p), "")
+            if desc:
+                figure_descriptions[ref] = desc
 
         return figure_descriptions
 

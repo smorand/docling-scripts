@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path  # noqa: TC003
 
@@ -25,9 +26,11 @@ def _extract_pptx_images(pptx_path: Path, output_dir: Path) -> dict[int, list[Pa
     images: dict[int, list[Path]] = {}
     fig_count = 0
     wmf_skipped = 0
+    seen_hashes: dict[str, Path] = {}  # hash -> filepath (for dedup)
+    dedup_count = 0
 
     def process_shape(shape: object, slide_num: int) -> None:
-        nonlocal fig_count, wmf_skipped
+        nonlocal fig_count, wmf_skipped, dedup_count
         if shape.shape_type == MSO_SHAPE_TYPE.GROUP:  # type: ignore[attr-defined]
             for grouped in shape.shapes:  # type: ignore[attr-defined]
                 process_shape(grouped, slide_num)
@@ -38,14 +41,21 @@ def _extract_pptx_images(pptx_path: Path, output_dir: Path) -> dict[int, list[Pa
                 if any(vf in content_type for vf in _VECTOR_FORMATS):
                     wmf_skipped += 1
                     return
+                blob = image.blob
+                blob_hash = hashlib.md5(blob).hexdigest()
+                if blob_hash in seen_hashes:
+                    images.setdefault(slide_num, []).append(seen_hashes[blob_hash])
+                    dedup_count += 1
+                    return
                 ext = content_type.split("/")[-1]
                 if ext == "jpeg":
                     ext = "jpg"
                 elif ext not in ("png", "jpg", "gif", "bmp", "tiff", "webp"):
                     ext = "png"
-                filename = f"slide{slide_num}_fig{fig_count}.{ext}"
+                filename = f"figure_{fig_count}.{ext}"
                 filepath = fig_dir / filename
-                filepath.write_bytes(image.blob)
+                filepath.write_bytes(blob)
+                seen_hashes[blob_hash] = filepath
                 images.setdefault(slide_num, []).append(filepath)
                 fig_count += 1
             except Exception:
@@ -55,7 +65,8 @@ def _extract_pptx_images(pptx_path: Path, output_dir: Path) -> dict[int, list[Pa
         for shape in slide.shapes:
             process_shape(shape, slide_idx + 1)
 
-    logger.info("Extracted %d image(s) from %d slide(s)", fig_count, len(prs.slides))
+    total = fig_count + dedup_count
+    logger.info("Extracted %d unique image(s) from %d total (%d duplicates removed)", fig_count, total, dedup_count)
     if wmf_skipped > 0:
         logger.warning("SKIPPED %d WMF/EMF image(s) (vector format not supported by PIL)", wmf_skipped)
     return images
