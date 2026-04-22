@@ -173,8 +173,20 @@ def _run_oauth2_flow(settings: Settings) -> str:
         def log_message(self, format: str, *args: object) -> None:
             pass  # Suppress HTTP server logs
 
-    # Start callback server
-    server = HTTPServer(("localhost", 3000), CallbackHandler)
+    # Start callback server (try port 3000, fallback to 3001)
+    port = 3000
+    for p in (3000, 3001, 3002):
+        try:
+            server = HTTPServer(("localhost", p), CallbackHandler)
+            server.socket.setsockopt(__import__("socket").SOL_SOCKET, __import__("socket").SO_REUSEADDR, 1)
+            port = p
+            break
+        except OSError:
+            if p == 3002:  # noqa: PLR2004
+                console.print("[red]Ports 3000-3002 are all in use. Free one and retry.[/red]")
+                raise SystemExit(1) from None
+
+    redirect_uri = f"http://localhost:{port}/oauth2callback"
     thread = threading.Thread(target=server.handle_request, daemon=True)
     thread.start()
 
@@ -182,7 +194,7 @@ def _run_oauth2_flow(settings: Settings) -> str:
     auth_url = (
         f"{OAUTH2_AUTH_URL}?"
         f"client_id={settings.google_client_id}&"
-        f"redirect_uri={OAUTH2_REDIRECT_URI}&"
+        f"redirect_uri={redirect_uri}&"
         f"response_type=code&"
         f"scope={OAUTH2_SCOPES}&"
         f"state={state}&"
@@ -212,7 +224,7 @@ def _run_oauth2_flow(settings: Settings) -> str:
             "client_secret": settings.google_client_secret,
             "code": auth_code[0],
             "grant_type": "authorization_code",
-            "redirect_uri": OAUTH2_REDIRECT_URI,
+            "redirect_uri": redirect_uri,
         },
     )
     resp.raise_for_status()
