@@ -39,16 +39,19 @@ EXTRACTION_PROMPT = (
 
 ANALYSIS_PROMPT = (
     "Analyze this video in depth and produce an executive summary.\n\n"
+    "For each key point, include the approximate timestamp in the format "
+    "*(~HH:MM:SS)* and the speaker name if identifiable, so the reader can "
+    "locate the original moment in the video.\n\n"
     "Include the following sections:\n\n"
     "## Executive Summary\n"
     "Concise overview of the video's key message and purpose\n\n"
     "## Key Takeaways\n"
-    "Numbered list of the most important points\n\n"
+    "Numbered list of the most important points with timestamps *(~HH:MM:SS)*\n\n"
     "## Detailed Analysis\n"
-    "In-depth breakdown of the content, arguments, and evidence presented\n\n"
+    "In-depth breakdown with speaker attribution and timestamps *(Speaker, ~HH:MM:SS)*\n\n"
     "## Action Items\n"
-    "| Item | Priority | Details |\n"
-    "|------|----------|--------|\n\n"
+    "| Item | Priority | Details | Source |\n"
+    "|------|----------|--------|--------|\n\n"
     "## Recommendations\n"
     "What to do with the information from this video\n"
 )

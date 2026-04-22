@@ -34,16 +34,19 @@ TRANSCRIPTION_PROMPT = (
 
 ANALYSIS_PROMPT = (
     "Analyze this audio recording and produce a structured meeting summary.\n\n"
+    "For each key point, decision, or action item, include the speaker name and "
+    "approximate timestamp in the format *(Speaker, ~MM:SS)* so the reader can "
+    "locate the original moment in the recording.\n\n"
     "Output the following sections in markdown:\n\n"
     "## Meeting Overview\n"
     "Date, duration, type, attendees\n\n"
     "## Key Discussion Points\n"
-    "Main topics discussed with important quotes\n\n"
+    "Main topics discussed with important quotes and source references *(Speaker, ~MM:SS)*\n\n"
     "## Decisions Made\n"
-    "Each decision with context\n\n"
+    "Each decision with context and who made it *(Speaker, ~MM:SS)*\n\n"
     "## Action Items\n"
-    "| Task | Assigned To | Due Date |\n"
-    "|------|------------|----------|\n\n"
+    "| Task | Assigned To | Due Date | Source |\n"
+    "|------|------------|----------|--------|\n\n"
     "## Next Steps\n"
     "Follow-ups, outstanding questions, next meeting\n"
 )

@@ -82,6 +82,11 @@ for understanding the document.
 - Highlight relationships and dependencies between concepts.
 - Be COMPLEMENTARY to the raw document: add perspective, synthesis, and structure. \
 Do not simply paraphrase or list everything.
+- **Source references**: For each key piece of information, add a reference to its location \
+in the source document using the format *(Page X)* or *(Pages X-Y)*. The source document \
+contains page/slide markers like `*[Page N]*`. Use them to cite where each fact, decision, \
+metric, or architecture element comes from. This helps the reader quickly locate the original \
+content.
 
 ## Step 3: Adapt your structure to the document type
 
