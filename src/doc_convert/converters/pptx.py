@@ -3,12 +3,47 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path  # noqa: TC003
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
 from doc_convert.base import BaseConverter
 from doc_convert.markdown import build_images_catalog, build_page_annotated_markdown, extract_title
 
 logger = logging.getLogger(__name__)
+
+_VECTOR_FORMATS = {"wmf", "emf", "x-wmf", "x-emf"}
+_HAS_MAGICK: bool | None = None
+
+
+def _check_magick() -> bool:
+    """Check if ImageMagick (magick) is available."""
+    global _HAS_MAGICK  # noqa: PLW0603
+    if _HAS_MAGICK is None:
+        _HAS_MAGICK = shutil.which("magick") is not None
+    return _HAS_MAGICK
+
+
+def _convert_wmf_to_png(wmf_data: bytes, output_path: Path) -> bool:
+    """Convert WMF/EMF bytes to PNG using ImageMagick. Returns True on success."""
+    if not _check_magick():
+        return False
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wmf", delete=False) as tmp:
+            tmp.write(wmf_data)
+            tmp_path = Path(tmp.name)
+        subprocess.run(
+            ["magick", str(tmp_path), str(output_path)],
+            capture_output=True,
+            check=True,
+        )
+        return output_path.exists()
+    except Exception:
+        logger.debug("ImageMagick conversion failed for %s", output_path.name)
+        return False
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def _extract_pptx_images(pptx_path: Path, output_dir: Path) -> dict[int, list[Path]]:
@@ -22,9 +57,10 @@ def _extract_pptx_images(pptx_path: Path, output_dir: Path) -> dict[int, list[Pa
 
     images: dict[int, list[Path]] = {}
     fig_count = 0
+    wmf_skipped = 0
 
     def process_shape(shape: object, slide_num: int) -> None:
-        nonlocal fig_count
+        nonlocal fig_count, wmf_skipped
         if shape.shape_type == MSO_SHAPE_TYPE.GROUP:  # type: ignore[attr-defined]
             for grouped in shape.shapes:  # type: ignore[attr-defined]
                 process_shape(grouped, slide_num)
@@ -32,8 +68,15 @@ def _extract_pptx_images(pptx_path: Path, output_dir: Path) -> dict[int, list[Pa
             try:
                 image = shape.image  # type: ignore[attr-defined]
                 content_type = image.content_type
-                # Skip WMF/EMF (Windows vector formats, not supported by PIL on macOS)
-                if "wmf" in content_type or "emf" in content_type or "x-wmf" in content_type or "x-emf" in content_type:
+                is_vector = any(vf in content_type for vf in _VECTOR_FORMATS)
+                if is_vector:
+                    png_name = f"slide{slide_num}_fig{fig_count}.png"
+                    png_path = fig_dir / png_name
+                    if _convert_wmf_to_png(image.blob, png_path):
+                        images.setdefault(slide_num, []).append(png_path)
+                        fig_count += 1
+                    else:
+                        wmf_skipped += 1
                     return
                 ext = content_type.split("/")[-1]
                 if ext == "jpeg":
@@ -53,6 +96,14 @@ def _extract_pptx_images(pptx_path: Path, output_dir: Path) -> dict[int, list[Pa
             process_shape(shape, slide_idx + 1)
 
     logger.info("Extracted %d image(s) from %d slide(s)", fig_count, len(prs.slides))
+    if wmf_skipped > 0:
+        if _check_magick():
+            logger.info("Converted WMF/EMF images to PNG via ImageMagick")
+        else:
+            logger.warning(
+                "Skipped %d WMF/EMF image(s) (install ImageMagick to convert: brew install imagemagick)",
+                wmf_skipped,
+            )
     return images
 
 
