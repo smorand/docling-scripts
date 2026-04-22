@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import logging
+import warnings
 
 from rich.console import Console
 from rich.logging import RichHandler
 
 console = Console(stderr=True)
+
+# Suppress noisy third-party warnings
+warnings.filterwarnings("ignore", message="Palette images with Transparency", category=UserWarning)
+warnings.filterwarnings("ignore", message="Passing `generation_config` together with generation-related")
 
 
 def setup_logging(*, verbose: int = 0, quiet: bool = False) -> None:
