@@ -244,6 +244,23 @@ def _list_folders(api_base: str, token: str) -> list[dict]:
     return resp.json().get("data", resp.json() if isinstance(resp.json(), list) else [])
 
 
+def _search_similar(api_base: str, token: str, title: str) -> list[dict]:
+    """Search for existing notes similar to the given title.
+
+    Uses hybrid search (BM25 + vector) to find potential duplicates.
+    Returns list of matching notes with path, title, and score.
+    """
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.get(
+            f"{api_base}/api/v1/search",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"q": title, "mode": "hybrid", "page_size": "5"},
+        )
+        resp.raise_for_status()
+    results = resp.json().get("results", [])
+    return [{"path": r.get("path", ""), "title": r.get("title", ""), "score": r.get("score", 0)} for r in results]
+
+
 def _store_note(api_base: str, token: str, note_data: dict) -> dict:
     """POST /api/v1/notes to create the note."""
     with httpx.Client(timeout=30.0) as client:
@@ -342,6 +359,26 @@ def create_note_from_conversion(
         # Generate note metadata via Sonnet 4.6
         note_data = _generate_note_metadata(content, folders, lang, settings)
         logger.info("Note: generated path=%s, title=%s", note_data.get("path"), note_data.get("title"))
+
+        # Check for similar existing notes (deduplication)
+        with trace_span("note.search_similar"):
+            similar = _search_similar(api_base, token, note_data.get("title", ""))
+        if similar:
+            top = similar[0]
+            score = top.get("score", 0)
+            if score > 0.7:  # noqa: PLR2004
+                logger.warning(
+                    "Note: similar note already exists: %s (score: %.2f). Skipping.",
+                    top.get("path"),
+                    score,
+                )
+                console.print(
+                    f"  [yellow]Similar note exists:[/yellow] {top.get('path')} "
+                    f"(title: {top.get('title')}, score: {score:.2f})"
+                )
+                console.print("  [dim]Use -f to force creation[/dim]")
+                return False
+            logger.info("Note: no strong duplicate found (top score: %.2f)", score)
 
         # Store the note
         with trace_span("note.store", path=note_data.get("path", "")):
