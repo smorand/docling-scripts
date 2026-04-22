@@ -111,6 +111,11 @@ def main(  # noqa: PLR0912, PLR0915
         "--lang",
         help="Output language for --analyze (e.g. fr, en). Default: auto-detect from document.",
     ),
+    note: bool = typer.Option(
+        False,
+        "--note",
+        help="Store a note in the Notes system from the conversion output",
+    ),
     force: bool = typer.Option(
         False,
         "-f",
@@ -180,6 +185,7 @@ def main(  # noqa: PLR0912, PLR0915
             use_external_llm,
             settings,
             companion_name_override=document,
+            note=note,
         )
         raise typer.Exit()
 
@@ -204,7 +210,17 @@ def main(  # noqa: PLR0912, PLR0915
         out_dir = resolve_output_dir(Path.cwd(), downloaded.stem, output)
         try:
             _run_media(
-                downloaded, out_dir, "video", meeting, analyze, instructions, lang, force, use_external_llm, settings
+                downloaded,
+                out_dir,
+                "video",
+                meeting,
+                analyze,
+                instructions,
+                lang,
+                force,
+                use_external_llm,
+                settings,
+                note=note,
             )
         finally:
             downloaded.unlink(missing_ok=True)
@@ -231,13 +247,33 @@ def main(  # noqa: PLR0912, PLR0915
             if is_audio_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
                 _run_media(
-                    doc_path, out_dir, "audio", meeting, analyze, instructions, lang, force, use_external_llm, settings
+                    doc_path,
+                    out_dir,
+                    "audio",
+                    meeting,
+                    analyze,
+                    instructions,
+                    lang,
+                    force,
+                    use_external_llm,
+                    settings,
+                    note=note,
                 )
                 raise typer.Exit()
             if is_video_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
                 _run_media(
-                    doc_path, out_dir, "video", meeting, analyze, instructions, lang, force, use_external_llm, settings
+                    doc_path,
+                    out_dir,
+                    "video",
+                    meeting,
+                    analyze,
+                    instructions,
+                    lang,
+                    force,
+                    use_external_llm,
+                    settings,
+                    note=note,
                 )
                 raise typer.Exit()
 
@@ -303,6 +339,11 @@ def main(  # noqa: PLR0912, PLR0915
         needs_analysis = analyze and (not (out_dir / "analysis.md").exists() or force)
         if needs_analysis and converter.run_analysis(use_external_llm, instructions, meeting, lang):
             console.print("  analysis.md")
+
+        if note and (not (out_dir / "note.json").exists() or force):
+            from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
+
+            create_note_from_conversion(out_dir, settings, lang=lang)
     finally:
         if tmp_file and tmp_file.exists():
             tmp_file.unlink()
@@ -321,6 +362,7 @@ def _run_media(
     settings: Settings,
     *,
     companion_name_override: str | None = None,
+    note: bool = False,
 ) -> None:
     """Dispatch to MediaConverter."""
     from doc_convert.companion import load_companion_context  # noqa: PLC0415
@@ -347,3 +389,8 @@ def _run_media(
         lang=lang,
         use_external_llm=use_external_llm,
     ).convert()
+
+    if note and (not (output_dir / "note.json").exists() or force):
+        from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
+
+        create_note_from_conversion(output_dir, settings, lang=lang)

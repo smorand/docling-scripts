@@ -23,5 +23,6 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     openrouter_api_key: str = ""
     google_credentials: str = ""
+    notes_api_url: str = "https://notes.mcp.scm-platform.org"
     llm_max_tokens: int = 8192
     llm_timeout: float = 120.0
