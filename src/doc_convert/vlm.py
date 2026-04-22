@@ -72,9 +72,11 @@ def describe_images_with_external_llm(
     """Describe images using an external LLM provider."""
     from doc_convert.converters.image import convert_image_to_markdown  # noqa: PLC0415
 
-    logger.info("Describing %d image(s) with %s/%s", len(image_paths), provider, model)
+    total = len(image_paths)
+    logger.info("Describing %d image(s) with %s/%s", total, provider, model)
     descriptions: list[str] = []
-    for img_path in image_paths:
+    for i, img_path in enumerate(image_paths, 1):
+        logger.info("Describing image %d/%d: %s", i, total, img_path.name)
         md = convert_image_to_markdown(img_path, provider, model, settings)
         descriptions.append(md.strip())
     return descriptions

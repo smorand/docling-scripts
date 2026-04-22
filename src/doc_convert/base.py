@@ -88,6 +88,7 @@ class BaseConverter(ABC):
                     item_refs.append(item.self_ref)
                     fig_count += 1
 
+        logger.info("Extracted %d figure(s)", fig_count)
         return figure_map, image_paths, item_refs
 
     def describe_figures(self, image_paths: list[Path], item_refs: list[str], span_name: str) -> dict[str, str]:

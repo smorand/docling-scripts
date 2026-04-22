@@ -179,6 +179,7 @@ def main(  # noqa: PLR0912, PLR0915
             force,
             use_external_llm,
             settings,
+            companion_name_override=document,
         )
         raise typer.Exit()
 
@@ -248,6 +249,13 @@ def main(  # noqa: PLR0912, PLR0915
         out_dir = resolve_output_dir(doc_path, doc_name, output)
         cached = check_cache(out_dir, force)
 
+        # ── Companion file detection ────────────────────────────────────
+        from doc_convert.companion import load_companion_context  # noqa: PLC0415
+
+        companion_ctx = load_companion_context(doc_path, out_dir, use_external_llm, settings, force=force)
+        if companion_ctx:
+            meeting = f"{companion_ctx}\n\n{meeting}" if meeting else companion_ctx
+
         options = ConvertOptions(
             output_dir=out_dir,
             vlm=not no_vlm,
@@ -311,13 +319,22 @@ def _run_media(
     force: bool,
     use_external_llm: str | None,
     settings: Settings,
+    *,
+    companion_name_override: str | None = None,
 ) -> None:
     """Dispatch to MediaConverter."""
+    from doc_convert.companion import load_companion_context  # noqa: PLC0415
     from doc_convert.converters.media import MediaConverter  # noqa: PLC0415
     from doc_convert.output import check_cache  # noqa: PLC0415
 
     if check_cache(output_dir, force):
         return
+
+    companion_ctx = load_companion_context(
+        media_path, output_dir, use_external_llm, settings, force=force, name_override=companion_name_override
+    )
+    if companion_ctx:
+        meeting = f"{companion_ctx}\n\n{meeting}" if meeting else companion_ctx
 
     options = ConvertOptions(output_dir=output_dir, settings=settings)
     MediaConverter(

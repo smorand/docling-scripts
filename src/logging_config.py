@@ -28,5 +28,5 @@ def setup_logging(*, verbose: int = 0, quiet: bool = False) -> None:
         level=level,
         format="%(message)s",
         datefmt="[%X]",
-        handlers=[RichHandler(console=console, show_path=False, rich_tracebacks=True)],
+        handlers=[RichHandler(console=console, show_path=False, rich_tracebacks=True, omit_repeated_times=False)],
     )
