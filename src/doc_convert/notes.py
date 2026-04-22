@@ -245,15 +245,16 @@ def _run_oauth2_flow(settings: Settings) -> str:
     return data["access_token"]
 
 
-def _list_folders(api_base: str, token: str) -> list[dict]:
-    """GET /api/v1/folders to discover available folders."""
-    with httpx.Client(timeout=30.0) as client:
-        resp = client.get(
-            f"{api_base}/api/v1/folders",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp.raise_for_status()
-    return resp.json().get("data", resp.json() if isinstance(resp.json(), list) else [])
+KNOWN_FOLDERS = """- professional/: Work meetings, projects, partners, proposals
+- tech/: Technology notes, articles, tools, architecture
+- travel/: Flights, hotels, bookings, itineraries
+- finance/: Invoices, bank accounts, receipts
+- administrative/: General admin, official documents, emails
+- identity/: Identity documents (passport, ID cards)
+- credentials/: WiFi passwords, logins
+- orders/: Purchases, deliveries
+- health/: Medical records, prescriptions
+- personal/: Personal notes, ideas"""
 
 
 def _search_similar(api_base: str, token: str, title: str) -> list[dict]:
@@ -296,13 +297,11 @@ def _store_note(api_base: str, token: str, note_data: dict) -> dict:
 
 def _generate_note_metadata(
     document_content: str,
-    folders: list[dict],
     lang: str | None,
     settings: Settings,
 ) -> dict:
     """Call Sonnet 4.6 to generate {path, title, tags, type, content}."""
-    folders_text = "\n".join(f"- {f.get('path', f.get('name', ''))}: {f.get('description', '')}" for f in folders)
-    system = NOTE_SYSTEM_PROMPT.format(folders=folders_text)
+    system = NOTE_SYSTEM_PROMPT.format(folders=KNOWN_FOLDERS)
     if lang:
         system = f"IMPORTANT: Write the note content in {lang}.\n\n{system}"
 
@@ -361,15 +360,10 @@ def create_note_from_conversion(
 
         # Get Google OAuth2 token
         token = _get_notes_token(settings)
-
-        # List folders
         api_base = settings.notes_api_url
-        with trace_span("note.list_folders"):
-            folders = _list_folders(api_base, token)
-        logger.info("Note: found %d folder(s) in Notes system", len(folders))
 
         # Generate note metadata via Sonnet 4.6
-        note_data = _generate_note_metadata(content, folders, lang, settings)
+        note_data = _generate_note_metadata(content, lang, settings)
         logger.info("Note: generated path=%s, title=%s", note_data.get("path"), note_data.get("title"))
 
         # Check for similar existing notes (deduplication)
