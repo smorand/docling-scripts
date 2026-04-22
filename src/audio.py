@@ -37,6 +37,13 @@ TRANSCRIPTION_PROMPT = (
 
 ANALYSIS_PROMPT = (
     "Analyze this audio recording and produce a structured meeting summary.\n\n"
+    "Start with a metadata header:\n"
+    "```\n"
+    "**Source:** <filename>\n"
+    "**Format:** Audio recording\n"
+    "**Type:** <meeting type: team sync, steering committee, one-to-one, workshop, etc.>\n"
+    "**Date:** <date if identifiable from content or filename>\n"
+    "```\n\n"
     "For each key point, decision, or action item, include the speaker name and "
     "approximate timestamp in the format *(Speaker, ~MM:SS)* so the reader can "
     "locate the original moment in the recording.\n\n"

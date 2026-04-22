@@ -57,17 +57,23 @@ DOCUMENT_ANALYSIS_SYSTEM_PROMPT = """\
 You are a senior analyst. Analyze the document provided and produce a structured \
 analysis in markdown.
 
-## Step 1: Identify the document type
+## Step 1: Identify and state the document metadata
 
-First, identify what type of document this is. State it clearly at the top:
+Start your analysis with a metadata header. The source file information is provided \
+in the user message (file name, format). Use it along with the content to determine:
 
 ```
-**Document type:** <type>
+**Source:** <original filename>
+**Format:** <source format: PowerPoint, PDF, Word, Excel, Email, etc.>
+**Document type:** <content type: Partnership Proposal, Technical Article, Commercial Email, \
+Status Report, Architecture Document, Meeting Notes, etc.>
+**Date:** <document date if identifiable from content, headers, or filename>
 ```
 
-Common types: Partnership/Project Proposal, Technology Article, Architecture Document, \
+Common document types: Partnership/Project Proposal, Technology Article, Architecture Document, \
 Strategy/Vision Deck, Demo/Product Showcase, Status Report, Market/Competitive Analysis, \
-Meeting Notes, Specification, Financial Report, Training Material. \
+Meeting Notes, Specification, Financial Report, Training Material, Commercial Email, \
+Internal Communication, Technical Email, Newsletter. \
 If it doesn't fit any of these, describe the type in a few words.
 
 ## Step 2: Produce the analysis
@@ -154,4 +160,6 @@ For any other type, create an appropriate structure that captures the essential 
 Items that need clarification or attention.
 """
 
-DOCUMENT_ANALYSIS_USER_PROMPT = "Analyze this document:\n\n{content}"
+DOCUMENT_ANALYSIS_USER_PROMPT = (
+    "Analyze this document.\n\nSource file: {source_name} (format: {source_format})\n\n{content}"
+)

@@ -43,6 +43,13 @@ EXTRACTION_PROMPT = (
 
 ANALYSIS_PROMPT = (
     "Analyze this video in depth and produce an executive summary.\n\n"
+    "Start with a metadata header:\n"
+    "```\n"
+    "**Source:** <filename>\n"
+    "**Format:** Video\n"
+    "**Type:** <content type: demo, presentation, tutorial, meeting recording, webinar, etc.>\n"
+    "**Date:** <date if identifiable from content or filename>\n"
+    "```\n\n"
     "For each key point, include the approximate timestamp in the format "
     "*(~HH:MM:SS)* and the speaker name if identifiable, so the reader can "
     "locate the original moment in the video.\n\n"

@@ -13,6 +13,31 @@ from doc_convert.output import print_output_summary
 
 logger = logging.getLogger(__name__)
 
+_FORMAT_NAMES: dict[str, str] = {
+    ".pdf": "PDF",
+    ".docx": "Word (DOCX)",
+    ".xlsx": "Excel (XLSX)",
+    ".pptx": "PowerPoint (PPTX)",
+    ".pptm": "PowerPoint (PPTM)",
+    ".potx": "PowerPoint (POTX)",
+    ".ppsx": "PowerPoint (PPSX)",
+    ".eml": "Email (EML)",
+    ".ogg": "Audio (OGG)",
+    ".mp3": "Audio (MP3)",
+    ".wav": "Audio (WAV)",
+    ".m4a": "Audio (M4A)",
+    ".mp4": "Video (MP4)",
+    ".mkv": "Video (MKV)",
+    ".mov": "Video (MOV)",
+    ".jpg": "Image (JPEG)",
+    ".jpeg": "Image (JPEG)",
+    ".png": "Image (PNG)",
+}
+
+
+def _ext_to_format_name(ext: str) -> str:
+    return _FORMAT_NAMES.get(ext.lower(), ext.upper().lstrip("."))
+
 
 @dataclass(frozen=True)
 class ConvertOptions:
@@ -202,9 +227,12 @@ class BaseConverter(ABC):
         doc_content = doc_md_path.read_text()
         provider, model, api_key = resolve_media_llm(use_external_llm, self.options.settings)
 
+        source_name = self.source.name
+        source_format = _ext_to_format_name(self.source.suffix)
+
         if instructions:
             system = instructions
-            prompt = f"Analyze this document.\n\n{doc_content}"
+            prompt = f"Analyze this document.\n\nSource file: {source_name} (format: {source_format})\n\n{doc_content}"
         else:
             from doc_convert.analysis_prompt import (  # noqa: PLC0415
                 DOCUMENT_ANALYSIS_SYSTEM_PROMPT,
@@ -212,7 +240,9 @@ class BaseConverter(ABC):
             )
 
             system = DOCUMENT_ANALYSIS_SYSTEM_PROMPT
-            prompt = DOCUMENT_ANALYSIS_USER_PROMPT.format(content=doc_content)
+            prompt = DOCUMENT_ANALYSIS_USER_PROMPT.format(
+                content=doc_content, source_name=source_name, source_format=source_format
+            )
 
         if meeting:
             system = f"Context: {meeting}\n\n{system}"
