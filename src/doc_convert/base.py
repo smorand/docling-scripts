@@ -143,9 +143,15 @@ class BaseConverter(ABC):
         if len(unique_paths) < len(image_paths):
             logger.info("VLM dedup: %d unique images from %d total", len(unique_paths), len(image_paths))
 
+        # Auto-detect: use OpenRouter Gemini 3.1 Flash Lite if API key is available
+        use_external = self.options.external_llm
+        if not use_external and self.options.settings.openrouter_api_key:
+            use_external = ("openrouter", "google/gemini-3.1-flash-lite-preview")
+            logger.info("Auto-using openrouter/google/gemini-3.1-flash-lite-preview for image descriptions")
+
         with trace_span(span_name, count=len(unique_paths)):
-            if self.options.external_llm:
-                provider, model = self.options.external_llm
+            if use_external:
+                provider, model = use_external
                 desc_list = describe_images_with_external_llm(unique_paths, provider, model, self.options.settings)
             else:
                 desc_list = describe_images_with_vlm(unique_paths, self.options.vlm_preset, self.options.models_path)
