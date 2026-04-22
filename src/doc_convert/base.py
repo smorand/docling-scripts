@@ -62,14 +62,22 @@ class BaseConverter(ABC):
     def extract_figures_from_doc(self, doc: object) -> tuple[dict[str, str], list[Path], list[str]]:
         """Extract PictureItem images from a Docling document.
 
+        Deduplicates images by content hash: identical images (logos, icons
+        repeated across pages) are saved only once.
+
         Returns (figure_map, image_paths, item_refs).
         """
+        import hashlib  # noqa: PLC0415
+        import io  # noqa: PLC0415
+
         from docling_core.types.doc.document import PictureItem  # noqa: PLC0415
 
         figure_map: dict[str, str] = {}
         image_paths: list[Path] = []
         item_refs: list[str] = []
         fig_count = 0
+        seen_hashes: dict[str, Path] = {}
+        dedup_count = 0
 
         fig_dir = self.output_dir / "figures"
         fig_dir.mkdir(exist_ok=True)
@@ -81,14 +89,33 @@ class BaseConverter(ABC):
                     logger.warning("Failed to extract image: %s", item.self_ref)
                     continue
                 if img:
-                    filename = f"figure_{fig_count}.png"
-                    img.save(fig_dir / filename)
-                    figure_map[item.self_ref] = f"figures/{filename}"
-                    image_paths.append(fig_dir / filename)
-                    item_refs.append(item.self_ref)
-                    fig_count += 1
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    img_hash = hashlib.md5(buf.getvalue()).hexdigest()
 
-        logger.info("Extracted %d figure(s)", fig_count)
+                    if img_hash in seen_hashes:
+                        existing = seen_hashes[img_hash]
+                        figure_map[item.self_ref] = f"figures/{existing.name}"
+                        image_paths.append(existing)
+                        item_refs.append(item.self_ref)
+                        dedup_count += 1
+                    else:
+                        filename = f"figure_{fig_count}.png"
+                        filepath = fig_dir / filename
+                        filepath.write_bytes(buf.getvalue())
+                        seen_hashes[img_hash] = filepath
+                        figure_map[item.self_ref] = f"figures/{filename}"
+                        image_paths.append(filepath)
+                        item_refs.append(item.self_ref)
+                        fig_count += 1
+
+        total = fig_count + dedup_count
+        if dedup_count > 0:
+            logger.info(
+                "Extracted %d unique figure(s) from %d total (%d duplicates removed)", fig_count, total, dedup_count
+            )
+        else:
+            logger.info("Extracted %d figure(s)", fig_count)
         return figure_map, image_paths, item_refs
 
     def describe_figures(self, image_paths: list[Path], item_refs: list[str], span_name: str) -> dict[str, str]:
