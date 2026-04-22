@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 
 import httpx
@@ -59,46 +58,179 @@ Capture the essential information, decisions, and action items."
 """
 
 
+OAUTH2_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+OAUTH2_TOKEN_URL = "https://oauth2.googleapis.com/token"
+OAUTH2_REDIRECT_URI = "http://localhost:3000/oauth2callback"
+OAUTH2_SCOPES = "openid email profile"
+TOKEN_CACHE_FILE = Path.home() / ".cache" / "doc-convert" / "notes_token.json"
+
+
 def _get_notes_token(settings: Settings) -> str:
     """Get Google OAuth2 access token for Notes API.
 
-    Reuses GOOGLE_CREDENTIALS (same as Google Docs/Sheets).
-    The Notes API validates tokens via Google userinfo endpoint.
+    Uses OAuth2 authorization code flow with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
+    Tokens are cached in ~/.cache/doc-convert/notes_token.json and refreshed automatically.
+    On first use, opens a browser for Google login with callback on localhost:3000/oauth2callback.
     """
-    creds_path = settings.google_credentials
-    if not creds_path:
-        msg = "GOOGLE_CREDENTIALS env var is required for --note"
-        console.print(f"[red]{msg}[/red]")
+    if not settings.google_client_id or not settings.google_client_secret:
+        console.print("[red]GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars are required for --note[/red]")
         raise SystemExit(1)
 
-    creds_file = Path(os.path.expandvars(creds_path)).expanduser()
-    if not creds_file.exists():
-        console.print(f"[red]Credentials file not found: {creds_file}[/red]")
+    # Try cached token first
+    if TOKEN_CACHE_FILE.exists():
+        cached = json.loads(TOKEN_CACHE_FILE.read_text())
+        access_token = cached.get("access_token", "")
+        refresh_token = cached.get("refresh_token", "")
+
+        if access_token:
+            # Validate token
+            resp = httpx.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if resp.is_success:
+                return access_token
+
+        # Try refresh
+        if refresh_token:
+            refreshed = _refresh_token(settings, refresh_token)
+            if refreshed:
+                return refreshed
+
+    # Full OAuth2 flow: open browser, wait for callback
+    return _run_oauth2_flow(settings)
+
+
+def _refresh_token(settings: Settings, refresh_token: str) -> str | None:
+    """Refresh an expired access token. Returns new access token or None."""
+    try:
+        resp = httpx.post(
+            OAUTH2_TOKEN_URL,
+            data={
+                "client_id": settings.google_client_id,
+                "client_secret": settings.google_client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+        )
+        if resp.is_success:
+            data = resp.json()
+            # Update cache (keep refresh_token, update access_token)
+            TOKEN_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            cached = json.loads(TOKEN_CACHE_FILE.read_text()) if TOKEN_CACHE_FILE.exists() else {}
+            cached["access_token"] = data["access_token"]
+            TOKEN_CACHE_FILE.write_text(json.dumps(cached))
+            logger.info("Notes: refreshed OAuth2 token")
+            return data["access_token"]
+    except Exception:
+        logger.debug("Token refresh failed")
+    return None
+
+
+def _run_oauth2_flow(settings: Settings) -> str:
+    """Run full OAuth2 authorization code flow with local callback server."""
+    import secrets  # noqa: PLC0415
+    import threading  # noqa: PLC0415
+    import webbrowser  # noqa: PLC0415
+    from http.server import BaseHTTPRequestHandler, HTTPServer  # noqa: PLC0415
+    from urllib.parse import parse_qs, urlparse  # noqa: PLC0415
+
+    state = secrets.token_urlsafe(32)
+    auth_code: list[str] = []
+    server_error: list[str] = []
+
+    class CallbackHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            parsed = urlparse(self.path)
+            if parsed.path != "/oauth2callback":
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            params = parse_qs(parsed.query)
+            if params.get("state", [None])[0] != state:
+                server_error.append("State mismatch")
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"State mismatch. Please try again.")
+                return
+
+            if "code" in params:
+                auth_code.append(params["code"][0])
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(
+                    b"<html><body><h2>Authentication successful!</h2><p>You can close this tab.</p></body></html>"
+                )
+            else:
+                error = params.get("error", ["unknown"])[0]
+                server_error.append(error)
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(f"Error: {error}".encode())
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass  # Suppress HTTP server logs
+
+    # Start callback server
+    server = HTTPServer(("localhost", 3000), CallbackHandler)
+    thread = threading.Thread(target=server.handle_request, daemon=True)
+    thread.start()
+
+    # Open browser for authorization
+    auth_url = (
+        f"{OAUTH2_AUTH_URL}?"
+        f"client_id={settings.google_client_id}&"
+        f"redirect_uri={OAUTH2_REDIRECT_URI}&"
+        f"response_type=code&"
+        f"scope={OAUTH2_SCOPES}&"
+        f"state={state}&"
+        f"access_type=offline&"
+        f"prompt=consent"
+    )
+
+    console.print("[bold]Opening browser for Google authentication...[/bold]")
+    webbrowser.open(auth_url)
+
+    # Wait for callback
+    thread.join(timeout=120)
+    server.server_close()
+
+    if server_error:
+        console.print(f"[red]OAuth2 error: {server_error[0]}[/red]")
+        raise SystemExit(1)
+    if not auth_code:
+        console.print("[red]OAuth2 timeout: no callback received within 2 minutes[/red]")
         raise SystemExit(1)
 
-    from google.oauth2 import credentials as user_credentials  # noqa: PLC0415
-    from google.oauth2 import service_account  # noqa: PLC0415
+    # Exchange code for tokens
+    resp = httpx.post(
+        OAUTH2_TOKEN_URL,
+        data={
+            "client_id": settings.google_client_id,
+            "client_secret": settings.google_client_secret,
+            "code": auth_code[0],
+            "grant_type": "authorization_code",
+            "redirect_uri": OAUTH2_REDIRECT_URI,
+        },
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
-    creds_data = json.loads(creds_file.read_text())
-    scopes = [
-        "https://www.googleapis.com/auth/userinfo.email",
-        "https://www.googleapis.com/auth/userinfo.profile",
-    ]
+    # Cache tokens
+    TOKEN_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TOKEN_CACHE_FILE.write_text(
+        json.dumps(
+            {
+                "access_token": data["access_token"],
+                "refresh_token": data.get("refresh_token", ""),
+            }
+        )
+    )
+    logger.info("Notes: OAuth2 tokens cached to %s", TOKEN_CACHE_FILE)
 
-    cred_type = creds_data.get("type", "")
-    if cred_type == "service_account":
-        creds = service_account.Credentials.from_service_account_file(str(creds_file), scopes=scopes)
-    elif cred_type == "authorized_user":
-        creds = user_credentials.Credentials.from_authorized_user_file(str(creds_file), scopes=scopes)
-    else:
-        console.print(f"[red]Unsupported credential type '{cred_type}'[/red]")
-        raise SystemExit(1)
-
-    from google.auth.transport.requests import Request as AuthRequest  # noqa: PLC0415
-
-    if not creds.valid:
-        creds.refresh(AuthRequest())
-    return creds.token
+    return data["access_token"]
 
 
 def _list_folders(api_base: str, token: str) -> list[dict]:
