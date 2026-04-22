@@ -22,11 +22,15 @@ YOUTUBE_RE = re.compile(
 
 EXTRACTION_PROMPT = (
     "Analyze this video and produce a structured markdown document.\n\n"
+    "Speaker identification rules:\n"
+    "- If a speaker identifies themselves by name and you are confident, use their real name.\n"
+    "- If you are NOT confident about a speaker's identity, use generic labels "
+    "(Speaker 1, Speaker 2, etc.). The user will replace them later.\n\n"
     "Include the following sections:\n\n"
     "## Summary\n"
     "2 to 5 paragraph overview of the video content\n\n"
     "## Transcription\n"
-    "Full speech/dialogue with timestamps [HH:MM:SS]\n\n"
+    "Full speech/dialogue with timestamps [HH:MM:SS] and speaker attribution\n\n"
     "## Scene Descriptions\n"
     "Timestamped visual descriptions of key scenes\n\n"
     "## Key Topics\n"
