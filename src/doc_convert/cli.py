@@ -244,6 +244,23 @@ def main(  # noqa: PLR0912, PLR0915
             from media_llm import is_audio_ext, is_video_ext  # noqa: PLC0415
 
             ext = doc_path.suffix.lower()
+            if ext == ".eml":
+                from doc_convert.converters.eml import EmlConverter  # noqa: PLC0415
+
+                out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
+                cached = check_cache(out_dir, force)
+                eml_options = ConvertOptions(output_dir=out_dir, settings=settings)
+                eml_converter = EmlConverter(doc_path, eml_options)
+                if not cached:
+                    eml_converter.convert()
+                needs_analysis = analyze and (not (out_dir / "analysis.md").exists() or force)
+                if needs_analysis and eml_converter.run_analysis(use_external_llm, instructions, meeting, lang):
+                    console.print("  analysis.md")
+                if note and (not (out_dir / "note.json").exists() or force):
+                    from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
+
+                    create_note_from_conversion(out_dir, settings, lang=lang)
+                raise typer.Exit()
             if is_audio_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
                 _run_media(
