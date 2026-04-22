@@ -154,7 +154,7 @@ def main(  # noqa: PLR0912, PLR0915
     Record:     doc-convert --start-audio "Meeting Name"
     Models:     doc-convert --download-models
     """
-    setup_logging(verbose=verbose, quiet=quiet)
+    setup_logging(verbose=verbose, quiet=quiet, source_path=document)
 
     if download_models:
         _download_models(vlm_preset.value, Settings())

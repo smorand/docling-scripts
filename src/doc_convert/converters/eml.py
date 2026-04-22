@@ -91,6 +91,7 @@ class EmlConverter(BaseConverter):
     """EML (email) conversion to structured markdown."""
 
     def convert(self) -> None:
+        logger.info("Converting %s (EML)", self.source.name)
         self.ensure_output_dir()
 
         raw = self.source.read_bytes()
