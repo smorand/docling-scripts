@@ -23,6 +23,7 @@ class MediaConverter(BaseConverter):
         meeting: str | None = None,
         analyze: bool = False,
         instructions: str | None = None,
+        lang: str | None = None,
         use_external_llm: str | None = None,
     ) -> None:
         super().__init__(source, options)
@@ -30,6 +31,7 @@ class MediaConverter(BaseConverter):
         self.meeting = meeting
         self.analyze = analyze
         self.instructions = instructions
+        self.lang = lang
         self.use_external_llm = use_external_llm
 
     def convert(self) -> None:
@@ -71,6 +73,9 @@ class MediaConverter(BaseConverter):
                 from video import build_analysis_prompt as video_analysis  # noqa: PLC0415
 
                 a_prompt, a_system = video_analysis(self.meeting)
+
+            if self.lang:
+                a_system = f"IMPORTANT: Write your entire response in {self.lang}.\n\n{a_system}"
 
             with trace_span(f"{self.media_type}.analyze", file=self.source.name, provider=provider):
                 analysis_md = process_media(self.source, provider, model, a_prompt, api_key, system_prompt=a_system)

@@ -106,6 +106,11 @@ def main(  # noqa: PLR0912, PLR0915
         "--instructions",
         help="Custom prompt for --analyze (overrides default analysis prompt)",
     ),
+    lang: str | None = typer.Option(
+        None,
+        "--lang",
+        help="Output language for --analyze (e.g. fr, en). Default: auto-detect from document.",
+    ),
     force: bool = typer.Option(
         False,
         "-f",
@@ -164,7 +169,16 @@ def main(  # noqa: PLR0912, PLR0915
         out_dir.mkdir(parents=True, exist_ok=True)
         audio_file = record_audio(out_dir / "audio.ogg")
         _run_media(
-            audio_file, out_dir, "audio", meeting or document, analyze, instructions, force, use_external_llm, settings
+            audio_file,
+            out_dir,
+            "audio",
+            meeting or document,
+            analyze,
+            instructions,
+            lang,
+            force,
+            use_external_llm,
+            settings,
         )
         raise typer.Exit()
 
@@ -188,7 +202,9 @@ def main(  # noqa: PLR0912, PLR0915
         downloaded = download_youtube(document)
         out_dir = resolve_output_dir(Path.cwd(), downloaded.stem, output)
         try:
-            _run_media(downloaded, out_dir, "video", meeting, analyze, instructions, force, use_external_llm, settings)
+            _run_media(
+                downloaded, out_dir, "video", meeting, analyze, instructions, lang, force, use_external_llm, settings
+            )
         finally:
             downloaded.unlink(missing_ok=True)
         raise typer.Exit()
@@ -214,13 +230,13 @@ def main(  # noqa: PLR0912, PLR0915
             if is_audio_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
                 _run_media(
-                    doc_path, out_dir, "audio", meeting, analyze, instructions, force, use_external_llm, settings
+                    doc_path, out_dir, "audio", meeting, analyze, instructions, lang, force, use_external_llm, settings
                 )
                 raise typer.Exit()
             if is_video_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
                 _run_media(
-                    doc_path, out_dir, "video", meeting, analyze, instructions, force, use_external_llm, settings
+                    doc_path, out_dir, "video", meeting, analyze, instructions, lang, force, use_external_llm, settings
                 )
                 raise typer.Exit()
 
@@ -277,7 +293,7 @@ def main(  # noqa: PLR0912, PLR0915
             converter.convert()
 
         needs_analysis = analyze and (not (out_dir / "analysis.md").exists() or force)
-        if needs_analysis and converter.run_analysis(use_external_llm, instructions, meeting):
+        if needs_analysis and converter.run_analysis(use_external_llm, instructions, meeting, lang):
             console.print("  analysis.md")
     finally:
         if tmp_file and tmp_file.exists():
@@ -291,6 +307,7 @@ def _run_media(
     meeting: str | None,
     analyze: bool,
     instructions: str | None,
+    lang: str | None,
     force: bool,
     use_external_llm: str | None,
     settings: Settings,
@@ -310,5 +327,6 @@ def _run_media(
         meeting=meeting,
         analyze=analyze,
         instructions=instructions,
+        lang=lang,
         use_external_llm=use_external_llm,
     ).convert()

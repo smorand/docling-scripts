@@ -112,11 +112,24 @@ class BaseConverter(ABC):
         use_external_llm: str | None,
         instructions: str | None = None,
         meeting: str | None = None,
+        lang: str | None = None,
     ) -> bool:
-        """Run LLM analysis on document.md, write analysis.md. Returns True if analysis was written."""
+        """Run LLM analysis on document.md, write analysis.md.
+
+        Uses the adaptive analysis prompt from analysis_prompt.py unless
+        overridden by custom instructions via -i/--instructions.
+
+        Args:
+            use_external_llm: Provider/model override (default: openrouter/google/gemini-2.5-flash)
+            instructions: Custom prompt (overrides the default analysis prompt entirely)
+            meeting: Context to inject into the prompt
+            lang: Output language (e.g. "fr", "en"). None = auto-detect from document.
+
+        Returns True if analysis was written.
+        """
         import httpx  # noqa: PLC0415
 
-        from doc_convert.providers import resolve_media_llm  # noqa: PLC0415
+        from doc_convert.providers import PROVIDER_URLS, resolve_media_llm  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415
 
         doc_md_path = self.output_dir / "document.md"
@@ -130,27 +143,18 @@ class BaseConverter(ABC):
             system = instructions
             prompt = f"Analyze this document.\n\n{doc_content}"
         else:
-            system = (
-                "Analyze this document and produce a structured summary in markdown.\n\n"
-                "Include the following sections:\n\n"
-                "## Executive Summary\n"
-                "Concise overview of the document's key message and purpose\n\n"
-                "## Key Points\n"
-                "Numbered list of the most important points\n\n"
-                "## Decisions / Conclusions\n"
-                "Each decision or conclusion with context\n\n"
-                "## Action Items\n"
-                "| Item | Owner | Priority |\n"
-                "|------|-------|----------|\n\n"
-                "## Next Steps\n"
-                "Follow-ups, outstanding questions\n"
+            from doc_convert.analysis_prompt import (  # noqa: PLC0415
+                DOCUMENT_ANALYSIS_SYSTEM_PROMPT,
+                DOCUMENT_ANALYSIS_USER_PROMPT,
             )
-            prompt = f"Analyze this document:\n\n{doc_content}"
+
+            system = DOCUMENT_ANALYSIS_SYSTEM_PROMPT
+            prompt = DOCUMENT_ANALYSIS_USER_PROMPT.format(content=doc_content)
 
         if meeting:
             system = f"Context: {meeting}\n\n{system}"
-
-        from doc_convert.providers import PROVIDER_URLS  # noqa: PLC0415
+        if lang:
+            system = f"IMPORTANT: Write your entire response in {lang}.\n\n{system}"
 
         with trace_span("document.analyze", file=self.source.name, provider=provider):
             logger.info("Analyzing %s with %s/%s", self.source.name, provider, model)
