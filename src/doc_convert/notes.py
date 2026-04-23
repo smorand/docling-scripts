@@ -434,7 +434,7 @@ def create_note_from_conversion(
             if similar:
                 top = similar[0]
                 score = top.get("score", 0)
-                if score > 0.7:  # noqa: PLR2004
+                if score > 0.85:  # noqa: PLR2004
                     logger.warning(
                         "Note: similar note exists: %s (score: %.2f). Skipping.",
                         top.get("path"),
