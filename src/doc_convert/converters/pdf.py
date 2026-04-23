@@ -38,7 +38,6 @@ class PdfConverter(BaseConverter):
             generate_picture_images=self.options.figures,
             do_picture_description=self.options.vlm and self.options.figures,
             do_picture_classification=self.options.figures,
-            artifacts_path=str(self.options.models_path),
         )
 
         if self.options.vlm:
