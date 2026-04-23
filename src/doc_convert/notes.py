@@ -276,7 +276,7 @@ def _search_similar(api_base: str, token: str, query: str, *, mode: str = "vecto
 
 def _store_note(api_base: str, token: str, note_data: dict) -> dict:
     """POST /api/v1/notes to create the note."""
-    with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(timeout=120.0) as client:
         resp = client.post(
             f"{api_base}/api/v1/notes",
             headers={
