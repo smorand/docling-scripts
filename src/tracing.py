@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -21,7 +23,7 @@ logger = logging.getLogger(__name__)
 _tracer: trace.Tracer | None = None
 
 
-def configure_tracing(service_name: str) -> None:
+def configure_tracing(service_name: str, *, source_path: str | None = None) -> None:
     """Initialize OpenTelemetry with JSONL file exporter."""
     global _tracer  # noqa: PLW0603
 
@@ -33,7 +35,9 @@ def configure_tracing(service_name: str) -> None:
 
         otel_dir = Path.home() / ".local" / "share" / "doc-convert"
         otel_dir.mkdir(parents=True, exist_ok=True)
-        log_file = (otel_dir / f"{service_name}-otel.log").open("a")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path_hash = hashlib.md5((source_path or "none").encode()).hexdigest()[:8]
+        log_file = (otel_dir / f"{service_name}-otel-{timestamp}-{path_hash}.log").open("a")
         exporter = ConsoleSpanExporter(out=log_file)
         provider.add_span_processor(SimpleSpanProcessor(exporter))
     except Exception:

@@ -168,7 +168,7 @@ def main(  # noqa: PLR0912, PLR0915
 
         from audio import record_audio  # noqa: PLC0415
 
-        configure_tracing("doc-convert")
+        configure_tracing("doc-convert", source_path=document)
         settings = Settings()
         out_dir = resolve_output_dir(None, document, output)
         out_dir.mkdir(parents=True, exist_ok=True)
