@@ -72,8 +72,8 @@ def _gemini_upload(file_path: Path, mime_type: str, api_key: str) -> dict:
     num_bytes = file_path.stat().st_size
     display_name = file_path.name
 
-    # Scale timeout based on file size (minimum 300s, +60s per 10MB)
-    upload_timeout = max(300.0, 120.0 * (num_bytes / (10 * 1024 * 1024)))
+    # Scale timeout based on file size: 300s per 10MB (minimum 300s)
+    upload_timeout = max(300.0, 300.0 * (num_bytes / (10 * 1024 * 1024)))
     logger.info("Uploading %.1f MB (timeout: %.0fs)", num_bytes / (1024 * 1024), upload_timeout)
     with httpx.Client(timeout=httpx.Timeout(upload_timeout, connect=30.0)) as client:
         # Step 1: initiate upload
