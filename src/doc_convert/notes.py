@@ -270,7 +270,10 @@ def _search_similar(api_base: str, token: str, query: str, *, mode: str = "vecto
             json={"q": query, "mode": mode, "page_size": 5},
         )
         resp.raise_for_status()
-    results = resp.json().get("results", [])
+    body = resp.json()
+    results = (
+        body.get("data", body).get("results", []) if isinstance(body.get("data"), dict) else body.get("results", [])
+    )
     return [{"path": r.get("path", ""), "title": r.get("title", ""), "score": r.get("score", 0)} for r in results]
 
 
@@ -417,6 +420,28 @@ def create_note_from_conversion(
             console.print(f"  [yellow]Note already exists:[/yellow] {note_data['path']}")
             console.print("  [dim]Use -f to force creation[/dim]")
             return False
+
+        # Check for semantic duplicates via vector search (catches similar notes under different paths)
+        note_content = note_data.get("content", "")
+        if note_content:
+            with trace_span("note.search_similar"):
+                similar = _search_similar(api_base, token, note_content, mode="vector")
+            if similar:
+                top = similar[0]
+                score = top.get("score", 0)
+                if score > 0.7:  # noqa: PLR2004
+                    logger.warning(
+                        "Note: similar note exists: %s (score: %.2f). Skipping.",
+                        top.get("path"),
+                        score,
+                    )
+                    console.print(
+                        f"  [yellow]Similar note exists:[/yellow] {top.get('path')} "
+                        f"(title: {top.get('title')}, score: {score:.2f})"
+                    )
+                    console.print("  [dim]Use -f to force creation[/dim]")
+                    return False
+                logger.info("Note: no strong duplicate found (top score: %.2f)", score)
 
         # Store the note
         with trace_span("note.store", path=note_data.get("path", "")):
