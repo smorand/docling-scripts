@@ -374,6 +374,7 @@ def create_note_from_conversion(
     settings: Settings,
     *,
     lang: str | None = None,
+    similarity_threshold: float = 0.85,
 ) -> bool:
     """Main entry point: read conversion output, generate note, store it.
 
@@ -434,7 +435,7 @@ def create_note_from_conversion(
             if similar:
                 top = similar[0]
                 score = top.get("score", 0)
-                if score > 0.85:  # noqa: PLR2004
+                if score > similarity_threshold:
                     logger.warning(
                         "Note: similar note exists: %s (score: %.2f). Skipping.",
                         top.get("path"),

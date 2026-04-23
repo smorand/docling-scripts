@@ -116,6 +116,11 @@ def main(  # noqa: PLR0912, PLR0915
         "--note",
         help="Store a note in the Notes system from the conversion output",
     ),
+    similarity_threshold: float = typer.Option(
+        0.85,
+        "--similarity-threshold",
+        help="Similarity score threshold for note deduplication (0.0-1.0)",
+    ),
     force: bool = typer.Option(
         False,
         "-f",
@@ -186,6 +191,7 @@ def main(  # noqa: PLR0912, PLR0915
             settings,
             companion_name_override=document,
             note=note,
+            similarity_threshold=similarity_threshold,
         )
         raise typer.Exit()
 
@@ -221,6 +227,7 @@ def main(  # noqa: PLR0912, PLR0915
                 use_external_llm,
                 settings,
                 note=note,
+                similarity_threshold=similarity_threshold,
             )
         finally:
             downloaded.unlink(missing_ok=True)
@@ -259,7 +266,7 @@ def main(  # noqa: PLR0912, PLR0915
                 if note and (not (out_dir / "note.json").exists() or force):
                     from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
-                    create_note_from_conversion(out_dir, settings, lang=lang)
+                    create_note_from_conversion(out_dir, settings, lang=lang, similarity_threshold=similarity_threshold)
                 raise typer.Exit()
             if is_audio_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
@@ -275,6 +282,7 @@ def main(  # noqa: PLR0912, PLR0915
                     use_external_llm,
                     settings,
                     note=note,
+                    similarity_threshold=similarity_threshold,
                 )
                 raise typer.Exit()
             if is_video_ext(ext):
@@ -291,6 +299,7 @@ def main(  # noqa: PLR0912, PLR0915
                     use_external_llm,
                     settings,
                     note=note,
+                    similarity_threshold=similarity_threshold,
                 )
                 raise typer.Exit()
 
@@ -360,7 +369,7 @@ def main(  # noqa: PLR0912, PLR0915
         if note and (not (out_dir / "note.json").exists() or force):
             from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
-            create_note_from_conversion(out_dir, settings, lang=lang)
+            create_note_from_conversion(out_dir, settings, lang=lang, similarity_threshold=similarity_threshold)
     finally:
         if tmp_file and tmp_file.exists():
             tmp_file.unlink()
@@ -380,6 +389,7 @@ def _run_media(
     *,
     companion_name_override: str | None = None,
     note: bool = False,
+    similarity_threshold: float = 0.85,
 ) -> None:
     """Dispatch to MediaConverter."""
     from doc_convert.companion import load_companion_context  # noqa: PLC0415
@@ -410,4 +420,4 @@ def _run_media(
     if note and (not (output_dir / "note.json").exists() or force):
         from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
-        create_note_from_conversion(output_dir, settings, lang=lang)
+        create_note_from_conversion(output_dir, settings, lang=lang, similarity_threshold=similarity_threshold)
