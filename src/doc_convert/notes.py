@@ -351,6 +351,16 @@ def _generate_note_metadata(
     return json.loads(raw)
 
 
+def _build_deterministic_path(folder: str, source_stem: str) -> str:
+    """Build a deterministic note path from the folder and source filename.
+
+    The path is always the same for the same source file, making
+    duplicate detection reliable via exact path match.
+    """
+    slug = _sanitize_path(source_stem)
+    return f"{folder.strip('/')}/{slug}"
+
+
 def create_note_from_conversion(
     output_dir: Path,
     settings: Settings,
@@ -359,8 +369,9 @@ def create_note_from_conversion(
 ) -> bool:
     """Main entry point: read conversion output, generate note, store it.
 
-    Reads analysis.md if present, otherwise document.md.
-    Searches for duplicates by source filename before generating.
+    The note path is built deterministically from the source filename,
+    so the same file always produces the same path (reliable dedup).
+    Sonnet 4.6 generates the folder, title, tags, type, and content.
     Returns True if note was stored successfully.
     """
     try:
@@ -379,45 +390,33 @@ def create_note_from_conversion(
         token = _get_notes_token(settings)
         api_base = settings.notes_api_url
 
+        # Derive deterministic source stem from output dir name
+        source_stem = output_dir.name.replace("_docling", "")
+
         # Generate note metadata via Sonnet 4.6
         note_data = _generate_note_metadata(content, lang, settings)
-        logger.info("Note: generated path=%s, title=%s", note_data.get("path"), note_data.get("title"))
 
-        # Check for duplicate: exact path match (always reliable)
-        note_path = note_data.get("path", "")
-        if note_path:
-            with httpx.Client(timeout=30.0) as client:
-                check_resp = client.get(
-                    f"{api_base}/api/v1/notes",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={"path": note_path},
-                )
-            if check_resp.is_success:
-                logger.warning("Note: already exists at path %s. Skipping.", note_path)
-                console.print(f"  [yellow]Note already exists:[/yellow] {note_path}")
-                console.print("  [dim]Use -f to force creation[/dim]")
-                return False
+        # Build deterministic path: folder from Sonnet + slug from source filename
+        folder = (
+            note_data.get("path", "professional").rsplit("/", 1)[0]
+            if "/" in note_data.get("path", "")
+            else note_data.get("path", "professional")
+        )
+        note_data["path"] = _build_deterministic_path(folder, source_stem)
+        logger.info("Note: path=%s, title=%s", note_data["path"], note_data.get("title"))
 
-        # Check for semantic duplicates via vector search (when index is available)
-        note_content = note_data.get("content", "")
-        with trace_span("note.search_similar"):
-            similar = _search_similar(api_base, token, note_content, mode="vector")
-        if similar:
-            top = similar[0]
-            score = top.get("score", 0)
-            if score > 0.8:  # noqa: PLR2004
-                logger.warning(
-                    "Note: similar note already exists: %s (score: %.2f). Skipping.",
-                    top.get("path"),
-                    score,
-                )
-                console.print(
-                    f"  [yellow]Similar note exists:[/yellow] {top.get('path')} "
-                    f"(title: {top.get('title')}, score: {score:.2f})"
-                )
-                console.print("  [dim]Use -f to force creation[/dim]")
-                return False
-            logger.info("Note: no strong duplicate found (top score: %.2f)", score)
+        # Check for duplicate: exact path match (deterministic = reliable)
+        with httpx.Client(timeout=30.0) as client:
+            check_resp = client.get(
+                f"{api_base}/api/v1/notes",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"path": note_data["path"]},
+            )
+        if check_resp.is_success:
+            logger.warning("Note: already exists at path %s. Skipping.", note_data["path"])
+            console.print(f"  [yellow]Note already exists:[/yellow] {note_data['path']}")
+            console.print("  [dim]Use -f to force creation[/dim]")
+            return False
 
         # Store the note
         with trace_span("note.store", path=note_data.get("path", "")):
