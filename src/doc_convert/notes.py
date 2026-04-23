@@ -274,8 +274,22 @@ def _search_similar(api_base: str, token: str, query: str, *, mode: str = "vecto
     return [{"path": r.get("path", ""), "title": r.get("title", ""), "score": r.get("score", 0)} for r in results]
 
 
+def _sanitize_path(path: str) -> str:
+    """Sanitize note path: only allow a-z, 0-9, _, -, /."""
+    import re as _re  # noqa: PLC0415
+
+    # Replace dots and other invalid chars with hyphens
+    sanitized = _re.sub(r"[^a-zA-Z0-9_\-/]", "-", path)
+    # Collapse multiple hyphens
+    sanitized = _re.sub(r"-{2,}", "-", sanitized)
+    # Strip trailing hyphens from each segment
+    sanitized = "/".join(seg.strip("-") for seg in sanitized.split("/"))
+    return sanitized.lower()
+
+
 def _store_note(api_base: str, token: str, note_data: dict) -> dict:
     """POST /api/v1/notes to create the note."""
+    note_data["path"] = _sanitize_path(note_data["path"])
     with httpx.Client(timeout=300.0) as client:
         resp = client.post(
             f"{api_base}/api/v1/notes",
@@ -291,7 +305,9 @@ def _store_note(api_base: str, token: str, note_data: dict) -> dict:
                 "tags": note_data.get("tags", []),
             },
         )
-        resp.raise_for_status()
+        if not resp.is_success:
+            logger.error("Notes API error %d: %s", resp.status_code, resp.text[:500])
+            resp.raise_for_status()
     return resp.json()
 
 
@@ -367,7 +383,22 @@ def create_note_from_conversion(
         note_data = _generate_note_metadata(content, lang, settings)
         logger.info("Note: generated path=%s, title=%s", note_data.get("path"), note_data.get("title"))
 
-        # Check for duplicates using the GENERATED CONTENT via vector search
+        # Check for duplicate: exact path match (always reliable)
+        note_path = note_data.get("path", "")
+        if note_path:
+            with httpx.Client(timeout=30.0) as client:
+                check_resp = client.get(
+                    f"{api_base}/api/v1/notes",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"path": note_path},
+                )
+            if check_resp.is_success:
+                logger.warning("Note: already exists at path %s. Skipping.", note_path)
+                console.print(f"  [yellow]Note already exists:[/yellow] {note_path}")
+                console.print("  [dim]Use -f to force creation[/dim]")
+                return False
+
+        # Check for semantic duplicates via vector search (when index is available)
         note_content = note_data.get("content", "")
         with trace_span("note.search_similar"):
             similar = _search_similar(api_base, token, note_content, mode="vector")
