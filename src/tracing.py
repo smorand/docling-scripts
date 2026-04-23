@@ -31,7 +31,9 @@ def configure_tracing(service_name: str) -> None:
     try:
         from opentelemetry.sdk.trace.export import ConsoleSpanExporter  # noqa: PLC0415
 
-        log_file = Path(f"{service_name}-otel.log").open("a")  # noqa: SIM115
+        otel_dir = Path.home() / ".local" / "share" / "doc-convert"
+        otel_dir.mkdir(parents=True, exist_ok=True)
+        log_file = (otel_dir / f"{service_name}-otel.log").open("a")
         exporter = ConsoleSpanExporter(out=log_file)
         provider.add_span_processor(SimpleSpanProcessor(exporter))
     except Exception:
