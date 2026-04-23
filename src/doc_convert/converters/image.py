@@ -24,7 +24,7 @@ def convert_image_to_markdown(doc_path: Path, provider: str, model: str, setting
     )
     from docling.pipeline.vlm_pipeline import VlmPipeline  # noqa: PLC0415
 
-    from doc_convert.providers import EXTERNAL_LLM_PROMPT, PROVIDER_URLS, require_api_key  # noqa: PLC0415
+    from doc_convert.providers import PROVIDER_URLS, get_external_llm_prompt, require_api_key  # noqa: PLC0415
     from tracing import trace_span  # noqa: PLC0415
 
     api_key = require_api_key(provider, settings)
@@ -32,7 +32,7 @@ def convert_image_to_markdown(doc_path: Path, provider: str, model: str, setting
         url=PROVIDER_URLS[provider],
         params={"model": model, "max_tokens": settings.llm_max_tokens},
         headers={"Authorization": f"Bearer {api_key}"},
-        prompt=EXTERNAL_LLM_PROMPT,
+        prompt=get_external_llm_prompt(),
         scale=2.0,
         timeout=settings.llm_timeout,
         response_format=ResponseFormat.MARKDOWN,

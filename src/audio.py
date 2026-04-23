@@ -107,9 +107,21 @@ def record_audio(output_path: Path) -> Path:
     return output_path
 
 
+def _get_transcription_prompt() -> str:
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("audio", "transcription_system_prompt", TRANSCRIPTION_PROMPT)
+
+
+def _get_analysis_prompt() -> str:
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("audio", "analysis_system_prompt", ANALYSIS_PROMPT)
+
+
 def build_transcription_prompt(meeting_name: str | None = None) -> tuple[str, str | None]:
     """Build prompt and system prompt for transcription."""
-    system = TRANSCRIPTION_PROMPT
+    system = _get_transcription_prompt()
     prompt = "Transcribe this audio recording."
     if meeting_name:
         prompt = f"Transcribe this audio recording. Meeting: {meeting_name}"
@@ -119,7 +131,7 @@ def build_transcription_prompt(meeting_name: str | None = None) -> tuple[str, st
 
 def build_analysis_prompt(meeting_name: str | None = None) -> tuple[str, str | None]:
     """Build prompt and system prompt for analysis."""
-    system = ANALYSIS_PROMPT
+    system = _get_analysis_prompt()
     prompt = "Analyze this audio recording and produce a structured summary."
     if meeting_name:
         prompt = f"Analyze this audio recording. Meeting: {meeting_name}"

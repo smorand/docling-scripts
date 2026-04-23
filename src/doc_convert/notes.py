@@ -320,7 +320,12 @@ def _generate_note_metadata(
     settings: Settings,
 ) -> dict:
     """Call Sonnet 4.6 to generate {path, title, tags, type, content}."""
-    system = NOTE_SYSTEM_PROMPT.format(folders=KNOWN_FOLDERS)
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    note_model = get_prompt("notes", "model", NOTE_MODEL)
+    note_prompt = get_prompt("notes", "system_prompt", NOTE_SYSTEM_PROMPT)
+    folders = get_prompt("notes", "known_folders", KNOWN_FOLDERS)
+    system = note_prompt.format(folders=folders)
     if lang:
         system = f"IMPORTANT: Write the note content in {lang}.\n\n{system}"
 
@@ -328,8 +333,8 @@ def _generate_note_metadata(
         console.print("[red]OPENROUTER_API_KEY is required for --note (uses Claude Sonnet 4.6)[/red]")
         raise SystemExit(1)
 
-    with trace_span("note.generate", model=NOTE_MODEL):
-        logger.info("Generating note with %s", NOTE_MODEL)
+    with trace_span("note.generate", model=note_model):
+        logger.info("Generating note with %s", note_model)
         with httpx.Client(timeout=300.0) as client:
             resp = client.post(
                 PROVIDER_URLS["openrouter"],
@@ -338,7 +343,7 @@ def _generate_note_metadata(
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": NOTE_MODEL,
+                    "model": note_model,
                     "messages": [
                         {"role": "system", "content": system},
                         {"role": "user", "content": f"Generate a note from this document:\n\n{document_content}"},

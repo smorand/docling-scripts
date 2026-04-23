@@ -160,6 +160,20 @@ For any other type, create an appropriate structure that captures the essential 
 Items that need clarification or attention.
 """
 
-DOCUMENT_ANALYSIS_USER_PROMPT = (
-    "Analyze this document.\n\nSource file: {source_name} (format: {source_format})\n\n{content}"
-)
+_DEFAULT_USER_PROMPT = "Analyze this document.\n\nSource file: {source_name} (format: {source_format})\n\n{content}"
+
+
+def get_document_analysis_system_prompt() -> str:
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("analysis", "document_system_prompt", DOCUMENT_ANALYSIS_SYSTEM_PROMPT)
+
+
+def get_document_analysis_user_prompt() -> str:
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("analysis", "document_user_prompt", _DEFAULT_USER_PROMPT)
+
+
+# Keep module-level alias for backward compat
+DOCUMENT_ANALYSIS_USER_PROMPT = _DEFAULT_USER_PROMPT

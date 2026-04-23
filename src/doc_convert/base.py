@@ -235,12 +235,12 @@ class BaseConverter(ABC):
             prompt = f"Analyze this document.\n\nSource file: {source_name} (format: {source_format})\n\n{doc_content}"
         else:
             from doc_convert.analysis_prompt import (  # noqa: PLC0415
-                DOCUMENT_ANALYSIS_SYSTEM_PROMPT,
-                DOCUMENT_ANALYSIS_USER_PROMPT,
+                get_document_analysis_system_prompt,
+                get_document_analysis_user_prompt,
             )
 
-            system = DOCUMENT_ANALYSIS_SYSTEM_PROMPT
-            prompt = DOCUMENT_ANALYSIS_USER_PROMPT.format(
+            system = get_document_analysis_system_prompt()
+            prompt = get_document_analysis_user_prompt().format(
                 content=doc_content, source_name=source_name, source_format=source_format
             )
 

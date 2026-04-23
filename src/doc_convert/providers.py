@@ -7,7 +7,7 @@ import typer
 from config import Settings  # noqa: TC001
 from logging_config import console
 
-EXTERNAL_LLM_PROMPT = (
+_DEFAULT_LLM_PROMPT = (
     "Convert this document page to well-structured markdown. "
     "Extract ALL text precisely.\n\n"
     "For administrative documents, clearly identify and highlight:\n"
@@ -24,6 +24,16 @@ EXTERNAL_LLM_PROMPT = (
     "Format these as bold or in a clearly labeled section. "
     "Do not miss any text. Output only the bare markdown."
 )
+
+
+def get_external_llm_prompt() -> str:
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("document", "llm_conversion_prompt", _DEFAULT_LLM_PROMPT)
+
+
+# Keep module-level alias for backward compat (used by image.py)
+EXTERNAL_LLM_PROMPT = _DEFAULT_LLM_PROMPT
 
 PROVIDER_URLS: dict[str, str] = {
     "google": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",

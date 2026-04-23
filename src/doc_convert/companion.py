@@ -77,6 +77,12 @@ information, omit it entirely.
 """
 
 
+def _get_companion_prompt() -> str:
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("companion", "context_system_prompt", COMPANION_SYSTEM_PROMPT)
+
+
 def detect_companion(source_path: Path, *, name_override: str | None = None) -> Path | None:
     """Check if a companion .md file exists for the given source file.
 
@@ -225,7 +231,7 @@ def analyze_companion(bundle: str, provider: str, model: str, api_key: str) -> s
                 json={
                     "model": model,
                     "messages": [
-                        {"role": "system", "content": COMPANION_SYSTEM_PROMPT},
+                        {"role": "system", "content": _get_companion_prompt()},
                         {"role": "user", "content": f"Extract context from these notes:\n\n{bundle}"},
                     ],
                 },

@@ -149,10 +149,15 @@ build: sync
 	@uv build
 	@echo "Build complete! Artifacts in dist/"
 
-## install: Install as a uv tool (available system-wide)
+## install: Install as a uv tool (available system-wide) + copy default config
 install:
 	@echo "Installing $(PROJECT_NAME) as uv tool..."
 	@uv tool install . --reinstall --force
+	@mkdir -p ~/.config/doc-convert
+	@if [ ! -f ~/.config/doc-convert/config.yaml ]; then \
+		cp src/doc_convert/default_config.yaml ~/.config/doc-convert/config.yaml; \
+		echo "Default config copied to ~/.config/doc-convert/config.yaml"; \
+	fi
 	@echo "Install complete! Run 'doc-convert' from anywhere."
 
 ## uninstall: Remove uv tool

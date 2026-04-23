@@ -125,9 +125,21 @@ def download_youtube(url: str) -> Path:
     return filepath
 
 
+def _get_extraction_prompt() -> str:
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("video", "extraction_system_prompt", EXTRACTION_PROMPT)
+
+
+def _get_analysis_prompt() -> str:
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("video", "analysis_system_prompt", ANALYSIS_PROMPT)
+
+
 def build_extraction_prompt(meeting_name: str | None = None) -> tuple[str, str | None]:
     """Build prompt and system prompt for video content extraction."""
-    system = EXTRACTION_PROMPT
+    system = _get_extraction_prompt()
     prompt = "Extract all content from this video into structured markdown."
     if meeting_name:
         prompt = f"Extract all content from this video. Context: {meeting_name}"
@@ -137,7 +149,7 @@ def build_extraction_prompt(meeting_name: str | None = None) -> tuple[str, str |
 
 def build_analysis_prompt(meeting_name: str | None = None) -> tuple[str, str | None]:
     """Build prompt and system prompt for video analysis."""
-    system = ANALYSIS_PROMPT
+    system = _get_analysis_prompt()
     prompt = "Analyze this video and produce an executive summary."
     if meeting_name:
         prompt = f"Analyze this video. Context: {meeting_name}"
