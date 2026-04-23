@@ -157,7 +157,23 @@ def _gemini_generate(
         )
         resp.raise_for_status()
 
-    return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+    data = resp.json()
+    candidates = data.get("candidates", [])
+    if not candidates:
+        reason = data.get("promptFeedback", {}).get("blockReason", "unknown")
+        logger.error("Gemini returned no candidates. Block reason: %s. Response: %s", reason, str(data)[:500])
+        msg = f"Gemini returned no candidates (block reason: {reason})"
+        raise RuntimeError(msg)
+
+    content = candidates[0].get("content", {})
+    parts = content.get("parts", [])
+    if not parts:
+        finish = candidates[0].get("finishReason", "unknown")
+        logger.error("Gemini candidate has no parts. Finish reason: %s. Response: %s", finish, str(data)[:500])
+        msg = f"Gemini candidate has no content parts (finish reason: {finish})"
+        raise RuntimeError(msg)
+
+    return parts[0].get("text", "")
 
 
 def _gemini_delete(file_name: str, api_key: str) -> None:
