@@ -259,7 +259,7 @@ def main(  # noqa: PLR0912, PLR0915
                 if note and (not (out_dir / "note.json").exists() or force):
                     from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
-                    create_note_from_conversion(out_dir, settings, lang=lang, source_name=doc_path.name)
+                    create_note_from_conversion(out_dir, settings, lang=lang)
                 raise typer.Exit()
             if is_audio_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
@@ -360,7 +360,7 @@ def main(  # noqa: PLR0912, PLR0915
         if note and (not (out_dir / "note.json").exists() or force):
             from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
-            create_note_from_conversion(out_dir, settings, lang=lang, source_name=doc_path.name)
+            create_note_from_conversion(out_dir, settings, lang=lang)
     finally:
         if tmp_file and tmp_file.exists():
             tmp_file.unlink()
@@ -410,4 +410,4 @@ def _run_media(
     if note and (not (output_dir / "note.json").exists() or force):
         from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
-        create_note_from_conversion(output_dir, settings, lang=lang, source_name=media_path.name)
+        create_note_from_conversion(output_dir, settings, lang=lang)

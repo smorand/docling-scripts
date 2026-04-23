@@ -257,17 +257,17 @@ KNOWN_FOLDERS = """- professional/: Work meetings, projects, partners, proposals
 - personal/: Personal notes, ideas"""
 
 
-def _search_similar(api_base: str, token: str, title: str) -> list[dict]:
-    """Search for existing notes similar to the given title.
+def _search_similar(api_base: str, token: str, query: str, *, mode: str = "vector") -> list[dict]:
+    """Search for existing notes similar to the given content.
 
-    Uses hybrid search (BM25 + vector) to find potential duplicates.
+    Uses POST /api/v1/search with full content for accurate vector similarity.
     Returns list of matching notes with path, title, and score.
     """
     with httpx.Client(timeout=30.0) as client:
-        resp = client.get(
+        resp = client.post(
             f"{api_base}/api/v1/search",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"q": title, "mode": "hybrid", "page_size": "5"},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"q": query, "mode": mode, "page_size": 5},
         )
         resp.raise_for_status()
     results = resp.json().get("results", [])
@@ -340,7 +340,6 @@ def create_note_from_conversion(
     settings: Settings,
     *,
     lang: str | None = None,
-    source_name: str | None = None,
 ) -> bool:
     """Main entry point: read conversion output, generate note, store it.
 
@@ -364,16 +363,18 @@ def create_note_from_conversion(
         token = _get_notes_token(settings)
         api_base = settings.notes_api_url
 
-        # Check for duplicates by SOURCE FILENAME (before LLM call to save cost)
-        search_query = source_name or output_dir.stem.replace("_docling", "")
-        # Strip extension for better search
-        search_query = Path(search_query).stem if "." in search_query else search_query
+        # Generate note metadata via Sonnet 4.6
+        note_data = _generate_note_metadata(content, lang, settings)
+        logger.info("Note: generated path=%s, title=%s", note_data.get("path"), note_data.get("title"))
+
+        # Check for duplicates using the GENERATED CONTENT via vector search
+        note_content = note_data.get("content", "")
         with trace_span("note.search_similar"):
-            similar = _search_similar(api_base, token, search_query)
+            similar = _search_similar(api_base, token, note_content, mode="vector")
         if similar:
             top = similar[0]
             score = top.get("score", 0)
-            if score > 0.5:  # noqa: PLR2004
+            if score > 0.8:  # noqa: PLR2004
                 logger.warning(
                     "Note: similar note already exists: %s (score: %.2f). Skipping.",
                     top.get("path"),
@@ -385,11 +386,7 @@ def create_note_from_conversion(
                 )
                 console.print("  [dim]Use -f to force creation[/dim]")
                 return False
-            logger.info("Note: no duplicate found (top score: %.2f for query '%s')", score, search_query)
-
-        # Generate note metadata via Sonnet 4.6
-        note_data = _generate_note_metadata(content, lang, settings)
-        logger.info("Note: generated path=%s, title=%s", note_data.get("path"), note_data.get("title"))
+            logger.info("Note: no strong duplicate found (top score: %.2f)", score)
 
         # Store the note
         with trace_span("note.store", path=note_data.get("path", "")):
