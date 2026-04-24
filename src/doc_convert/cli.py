@@ -94,10 +94,12 @@ def main(  # noqa: PLR0912, PLR0915
         "--analyze",
         help="Add analysis pass: analysis.md (audio: summary, video: executive brief)",
     ),
-    analysis_depth: str = typer.Option(
-        "standard",
+    analysis_depth: int = typer.Option(
+        3,
         "--analysis-depth",
-        help="Analysis depth: brief (executive summary), standard, or detailed (comprehensive)",
+        help="Analysis depth level 1-5 (1=executive brief, 3=standard, 5=comprehensive)",
+        min=1,
+        max=5,
     ),
     meeting: str | None = typer.Option(
         None,

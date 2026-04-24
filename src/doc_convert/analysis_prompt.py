@@ -163,25 +163,37 @@ Items that need clarification or attention.
 _DEFAULT_USER_PROMPT = "Analyze this document.\n\nSource file: {source_name} (format: {source_format})\n\n{content}"
 
 DEPTH_INSTRUCTIONS = {
-    "brief": (
-        "DEPTH: BRIEF. Produce a concise executive summary. "
+    1: (
+        "DEPTH LEVEL: 1/5 (Executive Brief). Produce a very concise executive summary. "
         "Keep each section to 2-3 sentences maximum. "
         "Focus only on the most critical information: key decisions, main numbers, and immediate action items. "
         "Total output should be under 500 words.\n\n"
     ),
-    "standard": "",  # no additional instruction, use the prompt as-is
-    "detailed": (
-        "DEPTH: DETAILED. Produce a thorough, in-depth analysis. "
-        "Each section should be comprehensive with full context, reasoning, and supporting details. "
-        "Preserve all important quotes, specific numbers, technical details, team compositions, and timelines. "
-        "Include subsections where appropriate. Do not summarize away information that a reader would need "
+    2: (
+        "DEPTH LEVEL: 2/5 (Summary). Produce a concise analysis. "
+        "Cover main points with enough context to understand the document. "
+        "Keep details proportional to their importance. "
+        "Total output should be under 1000 words.\n\n"
+    ),
+    3: "",  # standard depth, no additional instruction
+    4: (
+        "DEPTH LEVEL: 4/5 (Detailed). Produce a thorough analysis. "
+        "Each section should include full context, reasoning, and supporting details. "
+        "Preserve important quotes, specific numbers, technical details, and timelines. "
+        "Include subsections where appropriate.\n\n"
+    ),
+    5: (
+        "DEPTH LEVEL: 5/5 (Comprehensive). Produce an exhaustive, in-depth analysis. "
+        "Each section should be comprehensive with full context, reasoning, and all supporting details. "
+        "Preserve ALL quotes, specific numbers, technical details, team compositions, and timelines. "
+        "Include subsections where appropriate. Do not summarize away any information that a reader would need "
         "to fully understand the document without reading the original. "
-        "Cross-reference related points across sections.\n\n"
+        "Cross-reference related points across sections. Highlight dependencies and implications.\n\n"
     ),
 }
 
 
-def get_document_analysis_system_prompt(depth: str = "standard") -> str:
+def get_document_analysis_system_prompt(depth: int = 3) -> str:
     from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
 
     base = get_prompt("analysis", "document_system_prompt", DOCUMENT_ANALYSIS_SYSTEM_PROMPT)

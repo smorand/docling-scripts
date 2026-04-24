@@ -201,7 +201,7 @@ class BaseConverter(ABC):
         instructions: str | None = None,
         meeting: str | None = None,
         lang: str | None = None,
-        depth: str = "standard",
+        depth: int = 3,
     ) -> bool:
         """Run LLM analysis on document.md, write analysis.md.
 
