@@ -94,6 +94,11 @@ def main(  # noqa: PLR0912, PLR0915
         "--analyze",
         help="Add analysis pass: analysis.md (audio: summary, video: executive brief)",
     ),
+    analysis_depth: str = typer.Option(
+        "standard",
+        "--analysis-depth",
+        help="Analysis depth: brief (executive summary), standard, or detailed (comprehensive)",
+    ),
     meeting: str | None = typer.Option(
         None,
         "-m",
@@ -261,7 +266,9 @@ def main(  # noqa: PLR0912, PLR0915
                 if not cached:
                     eml_converter.convert()
                 needs_analysis = analyze and (not (out_dir / "analysis.md").exists() or force)
-                if needs_analysis and eml_converter.run_analysis(use_external_llm, instructions, meeting, lang):
+                if needs_analysis and eml_converter.run_analysis(
+                    use_external_llm, instructions, meeting, lang, depth=analysis_depth
+                ):
                     console.print("  analysis.md")
                 if note and (not (out_dir / "note.json").exists() or force):
                     from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
@@ -363,7 +370,9 @@ def main(  # noqa: PLR0912, PLR0915
             converter.convert()
 
         needs_analysis = analyze and (not (out_dir / "analysis.md").exists() or force)
-        if needs_analysis and converter.run_analysis(use_external_llm, instructions, meeting, lang):
+        if needs_analysis and converter.run_analysis(
+            use_external_llm, instructions, meeting, lang, depth=analysis_depth
+        ):
             console.print("  analysis.md")
 
         if note and (not (out_dir / "note.json").exists() or force):

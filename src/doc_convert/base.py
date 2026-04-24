@@ -201,6 +201,7 @@ class BaseConverter(ABC):
         instructions: str | None = None,
         meeting: str | None = None,
         lang: str | None = None,
+        depth: str = "standard",
     ) -> bool:
         """Run LLM analysis on document.md, write analysis.md.
 
@@ -239,7 +240,7 @@ class BaseConverter(ABC):
                 get_document_analysis_user_prompt,
             )
 
-            system = get_document_analysis_system_prompt()
+            system = get_document_analysis_system_prompt(depth=depth)
             prompt = get_document_analysis_user_prompt().format(
                 content=doc_content, source_name=source_name, source_format=source_format
             )

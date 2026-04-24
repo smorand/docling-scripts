@@ -162,11 +162,31 @@ Items that need clarification or attention.
 
 _DEFAULT_USER_PROMPT = "Analyze this document.\n\nSource file: {source_name} (format: {source_format})\n\n{content}"
 
+DEPTH_INSTRUCTIONS = {
+    "brief": (
+        "DEPTH: BRIEF. Produce a concise executive summary. "
+        "Keep each section to 2-3 sentences maximum. "
+        "Focus only on the most critical information: key decisions, main numbers, and immediate action items. "
+        "Total output should be under 500 words.\n\n"
+    ),
+    "standard": "",  # no additional instruction, use the prompt as-is
+    "detailed": (
+        "DEPTH: DETAILED. Produce a thorough, in-depth analysis. "
+        "Each section should be comprehensive with full context, reasoning, and supporting details. "
+        "Preserve all important quotes, specific numbers, technical details, team compositions, and timelines. "
+        "Include subsections where appropriate. Do not summarize away information that a reader would need "
+        "to fully understand the document without reading the original. "
+        "Cross-reference related points across sections.\n\n"
+    ),
+}
 
-def get_document_analysis_system_prompt() -> str:
+
+def get_document_analysis_system_prompt(depth: str = "standard") -> str:
     from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
 
-    return get_prompt("analysis", "document_system_prompt", DOCUMENT_ANALYSIS_SYSTEM_PROMPT)
+    base = get_prompt("analysis", "document_system_prompt", DOCUMENT_ANALYSIS_SYSTEM_PROMPT)
+    prefix = DEPTH_INSTRUCTIONS.get(depth, "")
+    return f"{prefix}{base}" if prefix else base
 
 
 def get_document_analysis_user_prompt() -> str:
