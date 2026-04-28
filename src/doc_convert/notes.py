@@ -1,19 +1,25 @@
 """Note creation from conversion output.
 
-Uses Claude Sonnet 4.6 via OpenRouter to generate structured note metadata,
-then stores the note via the Notes REST API (Google OAuth2 auth).
+Uses Gemini Flash via Google API to generate structured note metadata
+(path, title, tags, type), then stores the note via the Notes REST API
+(Google OAuth2 auth) with the full analysis.md as content.
+
+Attachments (source file, companion .md, referenced files, document.md)
+are uploaded via signed URLs after note creation.
 
 ## Flow
 1. Read analysis.md (or document.md) from the _docling/ output
-2. GET /api/v1/folders to discover available folders
-3. Send content + folders to Sonnet 4.6 → {path, title, tags, type, content}
-4. POST /api/v1/notes to store the note
+2. Send content + folders + routing rules to Gemini Flash -> {path, title, tags, type}
+3. POST /api/v1/notes to store the note (content = raw analysis.md)
+4. Upload attachments via prepare-upload -> signed URL PUT
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import mimetypes
+import re
 from pathlib import Path
 
 import httpx
@@ -25,14 +31,16 @@ from tracing import trace_span
 
 logger = logging.getLogger(__name__)
 
-NOTE_MODEL = "anthropic/claude-sonnet-4.6"
+NOTE_MODEL = "google/gemini-2.5-flash"
 
 NOTE_SYSTEM_PROMPT = """\
 You are a note organizer. Given a document analysis and the list of available \
-folders, generate a structured note for storage in a personal knowledge system.
+folders, generate structured metadata for storage in a personal knowledge system.
 
 ## Available folders
 {folders}
+
+{routing_rules}
 
 ## Tag conventions
 - All tags are lowercase-hyphenated
@@ -51,11 +59,21 @@ Respond with ONLY valid JSON (no markdown fences, no explanation):
   "path": "folder/note-name-with-key-identifiers",
   "title": "Human readable title",
   "tags": ["tag1", "tag2", "2026", "2026-04"],
-  "type": "pro",
-  "content": "Concise markdown summary. NOT a full copy of the document. \
-Capture the essential information, decisions, and action items."
+  "type": "pro"
 }}
 """
+
+DEFAULT_ROUTING_RULES = """\
+## Routing rules
+- Meeting minutes and one-on-one notes go to professional/
+- Technology articles, tools, and architecture docs go to tech/
+- Travel bookings and tickets go to travel/
+- Invoices and receipts go to finance/
+- Identity documents (passport, ID cards) go to identity/
+- WiFi passwords and credentials go to credentials/
+- Purchases and deliveries go to orders/
+- Medical records go to health/
+- Personal notes and ideas go to personal/"""
 
 
 OAUTH2_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -63,6 +81,8 @@ OAUTH2_TOKEN_URL = "https://oauth2.googleapis.com/token"
 OAUTH2_REDIRECT_URI = "http://localhost:3000/oauth2callback"
 OAUTH2_SCOPES = "openid email profile"
 TOKEN_CACHE_FILE = Path.home() / ".cache" / "doc-convert" / "notes_token.json"
+
+MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
 def _get_notes_token(settings: Settings) -> str:
@@ -279,12 +299,10 @@ def _search_similar(api_base: str, token: str, query: str, *, mode: str = "vecto
 
 def _sanitize_path(path: str) -> str:
     """Sanitize note path: only allow a-z, 0-9, _, -, /."""
-    import re as _re  # noqa: PLC0415
-
     # Replace dots and other invalid chars with hyphens
-    sanitized = _re.sub(r"[^a-zA-Z0-9_\-/]", "-", path)
+    sanitized = re.sub(r"[^a-zA-Z0-9_\-/]", "-", path)
     # Collapse multiple hyphens
-    sanitized = _re.sub(r"-{2,}", "-", sanitized)
+    sanitized = re.sub(r"-{2,}", "-", sanitized)
     # Strip trailing hyphens from each segment
     sanitized = "/".join(seg.strip("-") for seg in sanitized.split("/"))
     return sanitized.lower()
@@ -319,34 +337,37 @@ def _generate_note_metadata(
     lang: str | None,
     settings: Settings,
 ) -> dict:
-    """Call Sonnet 4.6 to generate {path, title, tags, type, content}."""
+    """Call Gemini Flash to generate {path, title, tags, type}."""
     from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
 
     note_model = get_prompt("notes", "model", NOTE_MODEL)
     note_prompt = get_prompt("notes", "system_prompt", NOTE_SYSTEM_PROMPT)
     folders = get_prompt("notes", "known_folders", KNOWN_FOLDERS)
-    system = note_prompt.format(folders=folders)
+    routing_rules = get_prompt("notes", "routing_rules", DEFAULT_ROUTING_RULES)
+    system = note_prompt.format(folders=folders, routing_rules=routing_rules)
     if lang:
-        system = f"IMPORTANT: Write the note content in {lang}.\n\n{system}"
+        system = f"IMPORTANT: Generate the title in {lang}.\n\n{system}"
 
-    if not settings.openrouter_api_key:
-        console.print("[red]OPENROUTER_API_KEY is required for --note (uses Claude Sonnet 4.6)[/red]")
-        raise SystemExit(1)
+    # Resolve provider/model/key from the note_model spec (e.g. "google/gemini-2.5-flash")
+    from doc_convert.providers import parse_external_llm, require_api_key  # noqa: PLC0415
+
+    provider, model = parse_external_llm(note_model)
+    api_key = require_api_key(provider, settings)
 
     with trace_span("note.generate", model=note_model):
-        logger.info("Generating note with %s", note_model)
-        with httpx.Client(timeout=300.0) as client:
+        logger.info("Generating note metadata with %s", note_model)
+        with httpx.Client(timeout=120.0) as client:
             resp = client.post(
-                PROVIDER_URLS["openrouter"],
+                PROVIDER_URLS[provider],
                 headers={
-                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": note_model,
+                    "model": model,
                     "messages": [
                         {"role": "system", "content": system},
-                        {"role": "user", "content": f"Generate a note from this document:\n\n{document_content}"},
+                        {"role": "user", "content": f"Generate metadata for this document:\n\n{document_content}"},
                     ],
                 },
             )
@@ -369,18 +390,168 @@ def _build_deterministic_path(folder: str, source_stem: str) -> str:
     return f"{folder.strip('/')}/{slug}"
 
 
+# ── Attachment upload ────────────────────────────────────────────────────
+
+
+def _sanitize_attachment_name(filename: str) -> str:
+    """Sanitize filename for attachment: alphanumeric, hyphens, underscores, one dot before extension."""
+    stem, _, ext = filename.rpartition(".")
+    if not stem:
+        stem = ext
+        ext = ""
+    # Clean stem: replace invalid chars with hyphens
+    stem = re.sub(r"[^a-zA-Z0-9_\-]", "-", stem)
+    stem = re.sub(r"-{2,}", "-", stem).strip("-")
+    if ext:
+        ext = re.sub(r"[^a-zA-Z0-9]", "", ext)
+        return f"{stem}.{ext}"
+    return stem
+
+
+def _guess_mime_type(path: Path) -> str:
+    """Return MIME type for a file path."""
+    mime, _ = mimetypes.guess_type(str(path))
+    return mime or "application/octet-stream"
+
+
+def _upload_attachment(
+    api_base: str,
+    token: str,
+    note_path: str,
+    file_path: Path,
+    *,
+    attachment_name: str | None = None,
+) -> bool:
+    """Upload a single attachment to an existing note.
+
+    Two-step: POST prepare-upload -> PUT signed URL.
+    Returns True on success, False on failure (logged as warning).
+    """
+    name = _sanitize_attachment_name(attachment_name or file_path.name)
+    mime_type = _guess_mime_type(file_path)
+
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            # Step 1: get signed URL
+            prep_resp = client.post(
+                f"{api_base}/api/v1/notes/{note_path}/attachments/prepare-upload",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={"name": name, "mime_type": mime_type},
+            )
+            prep_resp.raise_for_status()
+            signed_url = prep_resp.json().get("signed_url") or prep_resp.json().get("url")
+            if not signed_url:
+                logger.warning("Attachment: no signed_url in prepare-upload response for %s", name)
+                return False
+
+        # Step 2: PUT file bytes to signed URL
+        file_bytes = file_path.read_bytes()
+        with httpx.Client(timeout=300.0) as client:
+            put_resp = client.put(
+                signed_url,
+                content=file_bytes,
+                headers={"Content-Type": mime_type},
+            )
+            put_resp.raise_for_status()
+
+        logger.info("Attachment uploaded: %s (%s, %.1f KB)", name, mime_type, len(file_bytes) / 1024)
+        return True
+    except Exception:
+        logger.warning("Failed to upload attachment %s", name, exc_info=True)
+        return False
+
+
+def _collect_attachments(
+    source_path: Path,
+    output_dir: Path,
+    companion_path: Path | None,
+    companion_ref_paths: list[Path],
+) -> list[tuple[Path, str | None]]:
+    """Collect all files to attach, applying size rules.
+
+    Returns list of (file_path, optional_display_name) tuples.
+    """
+    attachments: list[tuple[Path, str | None]] = []
+
+    # 1. Source file: attach if < 10MB
+    if source_path.exists():
+        size = source_path.stat().st_size
+        if size < MAX_ATTACHMENT_SIZE:
+            attachments.append((source_path, None))
+        else:
+            logger.info("Attachment: skipping source %s (%.1f MB > 10 MB)", source_path.name, size / 1024 / 1024)
+
+    # 2. Companion .md: always attach
+    if companion_path and companion_path.exists():
+        attachments.append((companion_path, None))
+
+    # 3. Files referenced in companion: attach if < 10MB each
+    for ref_path in companion_ref_paths:
+        if not ref_path.exists():
+            continue
+        size = ref_path.stat().st_size
+        if size < MAX_ATTACHMENT_SIZE:
+            attachments.append((ref_path, None))
+        else:
+            logger.info("Attachment: skipping ref %s (%.1f MB > 10 MB)", ref_path.name, size / 1024 / 1024)
+
+    # 4. document.md from _docling/ output: always attach
+    doc_md = output_dir / "document.md"
+    if doc_md.exists():
+        attachments.append((doc_md, "document.md"))
+
+    return attachments
+
+
+def _upload_attachments(
+    api_base: str,
+    token: str,
+    note_path: str,
+    source_path: Path,
+    output_dir: Path,
+    *,
+    companion_name_override: str | None = None,
+) -> None:
+    """Collect and upload all attachments for a note."""
+    from doc_convert.companion import detect_companion, resolve_reference_paths  # noqa: PLC0415
+
+    companion_path = detect_companion(source_path, name_override=companion_name_override)
+    ref_paths = resolve_reference_paths(companion_path) if companion_path else []
+    attachments = _collect_attachments(source_path, output_dir, companion_path, ref_paths)
+
+    if not attachments:
+        return
+
+    uploaded = 0
+    for file_path, display_name in attachments:
+        name = display_name or file_path.name
+        if _upload_attachment(api_base, token, note_path, file_path, attachment_name=name):
+            uploaded += 1
+            console.print(f"  [dim]attachment: {name}[/dim]")
+        else:
+            console.print(f"  [yellow]attachment failed: {name}[/yellow]")
+
+    if uploaded:
+        logger.info("Note: %d attachment(s) uploaded", uploaded)
+
+
+# ── Main entry point ──────────────────────────────────────���──────────────
+
+
 def create_note_from_conversion(
     output_dir: Path,
     settings: Settings,
     *,
+    source_path: Path | None = None,
+    companion_name_override: str | None = None,
     lang: str | None = None,
     similarity_threshold: float = 0.85,
 ) -> bool:
-    """Main entry point: read conversion output, generate note, store it.
+    """Main entry point: read conversion output, generate metadata, store note, upload attachments.
 
-    The note path is built deterministically from the source filename,
-    so the same file always produces the same path (reliable dedup).
-    Sonnet 4.6 generates the folder, title, tags, type, and content.
+    The note content is the raw analysis.md (or document.md fallback).
+    Gemini Flash generates only the metadata: path, title, tags, type.
+    The note path is built deterministically from the source filename.
     Returns True if note was stored successfully.
     """
     try:
@@ -402,10 +573,13 @@ def create_note_from_conversion(
         # Derive deterministic source stem from output dir name
         source_stem = output_dir.name.replace("_docling", "")
 
-        # Generate note metadata via Sonnet 4.6
+        # Generate note metadata via Gemini Flash (path, title, tags, type only)
         note_data = _generate_note_metadata(content, lang, settings)
 
-        # Build deterministic path: folder from Sonnet + slug from source filename
+        # Use analysis.md as the note content directly
+        note_data["content"] = content
+
+        # Build deterministic path: folder from LLM + slug from source filename
         folder = (
             note_data.get("path", "professional").rsplit("/", 1)[0]
             if "/" in note_data.get("path", "")
@@ -428,10 +602,9 @@ def create_note_from_conversion(
             return False
 
         # Check for semantic duplicates via vector search (catches similar notes under different paths)
-        note_content = note_data.get("content", "")
-        if note_content:
+        if content:
             with trace_span("note.search_similar"):
-                similar = _search_similar(api_base, token, note_content, mode="vector")
+                similar = _search_similar(api_base, token, content, mode="vector")
             if similar:
                 top = similar[0]
                 score = top.get("score", 0)
@@ -454,6 +627,18 @@ def create_note_from_conversion(
             _store_note(api_base, token, note_data)
         logger.info("Note stored: %s", note_data["path"])
         console.print(f"  [green]Note stored:[/green] {note_data['path']}")
+
+        # Upload attachments
+        if source_path:
+            with trace_span("note.attachments"):
+                _upload_attachments(
+                    api_base,
+                    token,
+                    note_data["path"],
+                    source_path,
+                    output_dir,
+                    companion_name_override=companion_name_override,
+                )
 
         # Also save the draft locally for reference
         draft_path = output_dir / "note.json"

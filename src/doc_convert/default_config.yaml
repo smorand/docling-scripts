@@ -434,17 +434,32 @@ companion:
 
     '
 notes:
-  model: anthropic/claude-sonnet-4.6
-  system_prompt: "You are a note organizer. Given a document analysis and the list of available folders, generate a structured\
-    \ note for storage in a personal knowledge system.\n\n## Available folders\n{folders}\n\n## Tag conventions\n- All tags\
-    \ are lowercase-hyphenated\n- MANDATORY: include date tags when dates are known (year: 2026, month: 2026-04)\n- Include\
-    \ document-type tag: meeting-minutes, meeting-analysis, article-summary, project-proposal, status-report, architecture-doc,\
-    \ etc.\n- Include context tag: professional, personal, tech, travel, finance\n- Include entity tags: company names (schneider-electric,\
-    \ ibm), person names (firstname-lastname)\n\n## Note types (choose one)\nnote, todo, identity, admin, finance, pro, travel,\
-    \ health, order, culture, tech\n\n## Output format\nRespond with ONLY valid JSON (no markdown fences, no explanation):\n\
-    {{\n  \"path\": \"folder/note-name-with-key-identifiers\",\n  \"title\": \"Human readable title\",\n  \"tags\": [\"tag1\"\
-    , \"tag2\", \"2026\", \"2026-04\"],\n  \"type\": \"pro\",\n  \"content\": \"Concise markdown summary. NOT a full copy\
-    \ of the document. Capture the essential information, decisions, and action items.\"\n}}\n"
+  model: google/gemini-2.5-flash
+  system_prompt: "You are a note organizer. Given a document analysis and the list\
+    \ of available folders, generate structured metadata for storage in a personal\
+    \ knowledge system.\n\n## Available folders\n{folders}\n\n{routing_rules}\n\n\
+    ## Tag conventions\n- All tags are lowercase-hyphenated\n- MANDATORY: include date\
+    \ tags when dates are known (year: 2026, month: 2026-04)\n- Include document-type\
+    \ tag: meeting-minutes, meeting-analysis, article-summary, project-proposal, status-report,\
+    \ architecture-doc, etc.\n- Include context tag: professional, personal, tech,\
+    \ travel, finance\n- Include entity tags: company names (schneider-electric, ibm),\
+    \ person names (firstname-lastname)\n\n## Note types (choose one)\nnote, todo,\
+    \ identity, admin, finance, pro, travel, health, order, culture, tech\n\n## Output\
+    \ format\nRespond with ONLY valid JSON (no markdown fences, no explanation):\n\
+    {{\n  \"path\": \"folder/note-name-with-key-identifiers\",\n  \"title\": \"Human\
+    \ readable title\",\n  \"tags\": [\"tag1\", \"tag2\", \"2026\", \"2026-04\"],\n\
+    \  \"type\": \"pro\"\n}}\n"
+  routing_rules: |
+    ## Routing rules
+    - Meeting minutes and one-on-one notes go to professional/
+    - Technology articles, tools, and architecture docs go to tech/
+    - Travel bookings and tickets go to travel/
+    - Invoices and receipts go to finance/
+    - Identity documents (passport, ID cards) go to identity/
+    - WiFi passwords and credentials go to credentials/
+    - Purchases and deliveries go to orders/
+    - Medical records go to health/
+    - Personal notes and ideas go to personal/
   known_folders: '- professional/: Work meetings, projects, partners, proposals
 
     - tech/: Technology notes, articles, tools, architecture

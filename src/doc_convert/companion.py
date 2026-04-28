@@ -36,6 +36,10 @@ BARE_FILENAME_RE = re.compile(
     r"\b([\w. -]+\.(?:pdf|docx|pptx|xlsx|txt|csv|md|json|yaml|yml))\b",
     re.IGNORECASE,
 )
+_IMAGE_FILENAME_RE = re.compile(
+    r"\b([\w. -]+\.(?:png|jpg|jpeg|gif|webp|svg|bmp|tiff))\b",
+    re.IGNORECASE,
+)
 
 # Text file extensions (loaded as raw text, no conversion needed)
 TEXT_EXTENSIONS = {".md", ".txt", ".csv", ".json", ".yaml", ".yml"}
@@ -201,6 +205,43 @@ def resolve_references(companion_path: Path, content: str, output_dir: Path, set
             logger.debug("Companion: skipping unsupported reference: %s", candidate.name)
 
     return references
+
+
+def resolve_reference_paths(companion_path: Path) -> list[Path]:
+    """Extract existing file paths referenced in a companion .md.
+
+    Resolves markdown links and bare filename mentions to absolute paths.
+    Only returns paths that exist as files on disk.
+    Unlike resolve_references(), does NOT load or convert the files.
+    """
+    content = companion_path.read_text()
+    companion_dir = companion_path.parent
+    seen: set[Path] = set()
+    paths: list[Path] = []
+
+    # Extract markdown link targets (skip URLs) — catches images via ![alt](path.png)
+    for match in MARKDOWN_LINK_RE.finditer(content):
+        target = match.group(2)
+        if target.startswith(("http://", "https://", "mailto:", "#")):
+            continue
+        candidate = (companion_dir / target).resolve()
+        if candidate.is_file() and candidate not in seen:
+            seen.add(candidate)
+            paths.append(candidate)
+
+    # Extract bare filename mentions (documents + images)
+    for match in BARE_FILENAME_RE.finditer(content):
+        candidate = (companion_dir / match.group(1)).resolve()
+        if candidate.is_file() and candidate not in seen:
+            seen.add(candidate)
+            paths.append(candidate)
+    for match in _IMAGE_FILENAME_RE.finditer(content):
+        candidate = (companion_dir / match.group(1)).resolve()
+        if candidate.is_file() and candidate not in seen:
+            seen.add(candidate)
+            paths.append(candidate)
+
+    return paths
 
 
 def build_companion_bundle(companion_path: Path, output_dir: Path, settings: Settings) -> str:

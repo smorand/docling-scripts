@@ -275,7 +275,9 @@ def main(  # noqa: PLR0912, PLR0915
                 if note and (not (out_dir / "note.json").exists() or force):
                     from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
-                    create_note_from_conversion(out_dir, settings, lang=lang, similarity_threshold=similarity_threshold)
+                    create_note_from_conversion(
+                        out_dir, settings, source_path=doc_path, lang=lang, similarity_threshold=similarity_threshold
+                    )
                 raise typer.Exit()
             if is_audio_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
@@ -380,7 +382,9 @@ def main(  # noqa: PLR0912, PLR0915
         if note and (not (out_dir / "note.json").exists() or force):
             from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
-            create_note_from_conversion(out_dir, settings, lang=lang, similarity_threshold=similarity_threshold)
+            create_note_from_conversion(
+                out_dir, settings, source_path=doc_path, lang=lang, similarity_threshold=similarity_threshold
+            )
     finally:
         if tmp_file and tmp_file.exists():
             tmp_file.unlink()
@@ -431,4 +435,11 @@ def _run_media(
     if note and (not (output_dir / "note.json").exists() or force):
         from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
-        create_note_from_conversion(output_dir, settings, lang=lang, similarity_threshold=similarity_threshold)
+        create_note_from_conversion(
+            output_dir,
+            settings,
+            source_path=media_path,
+            companion_name_override=companion_name_override,
+            lang=lang,
+            similarity_threshold=similarity_threshold,
+        )
