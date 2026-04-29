@@ -289,7 +289,8 @@ def _list_folders(api_base: str, token: str) -> str:
                 headers={"Authorization": f"Bearer {token}"},
             )
             resp.raise_for_status()
-        data = resp.json()
+        body = resp.json()
+        data = body.get("data", body)
         folders = data.get("folders", data if isinstance(data, list) else [])
         if not folders:
             logger.warning("Notes API returned empty folder list, using fallback")
