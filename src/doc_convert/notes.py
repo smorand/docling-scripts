@@ -672,9 +672,10 @@ def create_note_from_conversion(
                     companion_name_override=companion_name_override,
                 )
 
-        # Also save the draft locally for reference
+        # Save draft locally for reference + marker so the step is not re-run
         draft_path = output_dir / "note.json"
         draft_path.write_text(json.dumps(note_data, indent=2, ensure_ascii=False))
+        (output_dir / "note_sent").touch()
 
         return True
     except Exception:

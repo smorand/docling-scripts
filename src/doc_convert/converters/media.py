@@ -21,7 +21,6 @@ class MediaConverter(BaseConverter):
         *,
         media_type: str,
         meeting: str | None = None,
-        analyze: bool = False,
         instructions: str | None = None,
         lang: str | None = None,
         use_external_llm: str | None = None,
@@ -29,7 +28,6 @@ class MediaConverter(BaseConverter):
         super().__init__(source, options)
         self.media_type = media_type
         self.meeting = meeting
-        self.analyze = analyze
         self.instructions = instructions
         self.lang = lang
         self.use_external_llm = use_external_llm
@@ -58,30 +56,48 @@ class MediaConverter(BaseConverter):
         if self.meeting:
             md = f"# {self.meeting}\n\n{md}"
         self.write_document_md(md)
+        print_output_summary(self.output_dir)
 
-        extra: list[str] = []
+    def run_analysis(  # type: ignore[override]
+        self,
+        use_external_llm: str | None,
+        instructions: str | None = None,
+        meeting: str | None = None,
+        lang: str | None = None,
+    ) -> bool:
+        """Run media-specific analysis on the transcribed document.
 
-        if self.analyze:
-            if self.instructions:
-                a_prompt = self.instructions
-                a_system = f"Context: {self.meeting}\n\n{self.instructions}" if self.meeting else self.instructions
-            elif self.media_type == "audio":
-                from audio import build_analysis_prompt as audio_analysis  # noqa: PLC0415
+        Returns True if analysis was written.
+        """
+        from doc_convert.providers import resolve_media_llm  # noqa: PLC0415
+        from media_llm import process_media  # noqa: PLC0415
+        from tracing import trace_span  # noqa: PLC0415
 
-                a_prompt, a_system = audio_analysis(self.meeting)
-            else:
-                from video import build_analysis_prompt as video_analysis  # noqa: PLC0415
+        if not (self.output_dir / "document.md").exists():
+            return False
 
-                a_prompt, a_system = video_analysis(self.meeting)
+        provider, model, api_key = resolve_media_llm(use_external_llm, self.options.settings)
+        meeting_ctx = meeting or self.meeting
 
-            if self.lang:
-                a_system = f"IMPORTANT: Write your entire response in {self.lang}.\n\n{a_system}"
+        if instructions:
+            a_prompt = instructions
+            a_system = f"Context: {meeting_ctx}\n\n{instructions}" if meeting_ctx else instructions
+        elif self.media_type == "audio":
+            from audio import build_analysis_prompt as audio_analysis  # noqa: PLC0415
 
-            with trace_span(f"{self.media_type}.analyze", file=self.source.name, provider=provider):
-                analysis_md = process_media(self.source, provider, model, a_prompt, api_key, system_prompt=a_system)
-            if self.meeting:
-                analysis_md = f"# {self.meeting}\n\n{analysis_md}"
-            (self.output_dir / "analysis.md").write_text(analysis_md)
-            extra.append("analysis.md")
+            a_prompt, a_system = audio_analysis(meeting_ctx)
+        else:
+            from video import build_analysis_prompt as video_analysis  # noqa: PLC0415
 
-        print_output_summary(self.output_dir, extra_files=extra)
+            a_prompt, a_system = video_analysis(meeting_ctx)
+
+        if lang:
+            a_system = f"IMPORTANT: Write your entire response in {lang}.\n\n{a_system}"
+
+        with trace_span(f"{self.media_type}.analyze", file=self.source.name, provider=provider):
+            analysis_md = process_media(self.source, provider, model, a_prompt, api_key, system_prompt=a_system)
+        if meeting_ctx:
+            analysis_md = f"# {meeting_ctx}\n\n{analysis_md}"
+        (self.output_dir / "analysis.md").write_text(analysis_md)
+        logger.info("Analysis written to %s/analysis.md", self.output_dir)
+        return True

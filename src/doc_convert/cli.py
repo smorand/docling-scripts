@@ -10,7 +10,7 @@ import typer
 from config import Settings
 from doc_convert.base import ConvertOptions
 from doc_convert.formats import PRESET_REPO_IDS, VlmPreset
-from doc_convert.output import check_cache, resolve_output_dir
+from doc_convert.output import resolve_output_dir
 from logging_config import console, setup_logging
 from tracing import configure_tracing
 
@@ -260,19 +260,20 @@ def main(  # noqa: PLR0912, PLR0915
             ext = doc_path.suffix.lower()
             if ext == ".eml":
                 from doc_convert.converters.eml import EmlConverter  # noqa: PLC0415
+                from doc_convert.output import check_step_cache  # noqa: PLC0415
 
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
-                cached = check_cache(out_dir, force)
                 eml_options = ConvertOptions(output_dir=out_dir, settings=settings)
                 eml_converter = EmlConverter(doc_path, eml_options)
-                if not cached:
+                if not check_step_cache(out_dir, "document.md", force):
                     eml_converter.convert()
-                needs_analysis = analyze and (not (out_dir / "analysis.md").exists() or force)
-                if needs_analysis and eml_converter.run_analysis(
-                    use_external_llm, instructions, meeting, lang, depth=analysis_depth
+                if (
+                    analyze
+                    and not check_step_cache(out_dir, "analysis.md", force)
+                    and eml_converter.run_analysis(use_external_llm, instructions, meeting, lang, depth=analysis_depth)
                 ):
                     console.print("  analysis.md")
-                if note and (not (out_dir / "note.json").exists() or force):
+                if note and not check_step_cache(out_dir, "note_sent", force):
                     from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
                     create_note_from_conversion(
@@ -319,8 +320,9 @@ def main(  # noqa: PLR0912, PLR0915
             fmt = detect_format(doc_path)
             doc_name = doc_path.stem
 
+        from doc_convert.output import check_step_cache  # noqa: PLC0415
+
         out_dir = resolve_output_dir(doc_path, doc_name, output)
-        cached = check_cache(out_dir, force)
 
         # ── Companion file detection ────────────────────────────────────
         from doc_convert.companion import load_companion_context  # noqa: PLC0415
@@ -370,16 +372,20 @@ def main(  # noqa: PLR0912, PLR0915
             console.print(f"[red]Unsupported format: {fmt}[/red]")
             raise typer.Exit(1)
 
-        if not cached:
+        # Step 1: Conversion (skip if document.md exists)
+        if not check_step_cache(out_dir, "document.md", force):
             converter.convert()
 
-        needs_analysis = analyze and (not (out_dir / "analysis.md").exists() or force)
-        if needs_analysis and converter.run_analysis(
-            use_external_llm, instructions, meeting, lang, depth=analysis_depth
+        # Step 2: Analysis (skip if analysis.md exists)
+        if (
+            analyze
+            and not check_step_cache(out_dir, "analysis.md", force)
+            and converter.run_analysis(use_external_llm, instructions, meeting, lang, depth=analysis_depth)
         ):
             console.print("  analysis.md")
 
-        if note and (not (out_dir / "note.json").exists() or force):
+        # Step 3: Note (skip if note_sent exists)
+        if note and not check_step_cache(out_dir, "note_sent", force):
             from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
             create_note_from_conversion(
@@ -406,13 +412,10 @@ def _run_media(
     note: bool = False,
     similarity_threshold: float = 0.85,
 ) -> None:
-    """Dispatch to MediaConverter."""
+    """Dispatch to MediaConverter with independent step caching."""
     from doc_convert.companion import load_companion_context  # noqa: PLC0415
     from doc_convert.converters.media import MediaConverter  # noqa: PLC0415
-    from doc_convert.output import check_cache  # noqa: PLC0415
-
-    if check_cache(output_dir, force):
-        return
+    from doc_convert.output import check_step_cache  # noqa: PLC0415
 
     companion_ctx = load_companion_context(
         media_path, output_dir, use_external_llm, settings, force=force, name_override=companion_name_override
@@ -421,18 +424,30 @@ def _run_media(
         meeting = f"{companion_ctx}\n\n{meeting}" if meeting else companion_ctx
 
     options = ConvertOptions(output_dir=output_dir, settings=settings)
-    MediaConverter(
+    converter = MediaConverter(
         media_path,
         options,
         media_type=media_type,
         meeting=meeting,
-        analyze=analyze,
         instructions=instructions,
         lang=lang,
         use_external_llm=use_external_llm,
-    ).convert()
+    )
 
-    if note and (not (output_dir / "note.json").exists() or force):
+    # Step 1: Conversion (skip if document.md exists)
+    if not check_step_cache(output_dir, "document.md", force):
+        converter.convert()
+
+    # Step 2: Analysis (skip if analysis.md exists)
+    if (
+        analyze
+        and not check_step_cache(output_dir, "analysis.md", force)
+        and converter.run_analysis(use_external_llm, instructions, meeting, lang)
+    ):
+        console.print("  analysis.md")
+
+    # Step 3: Note (skip if note_sent exists)
+    if note and not check_step_cache(output_dir, "note_sent", force):
         from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
         create_note_from_conversion(

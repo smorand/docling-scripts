@@ -38,7 +38,10 @@ def resolve_output_dir(source_path: Path | None, name: str, output_override: str
 
 
 def check_cache(out_path: Path, force: bool) -> bool:
-    """Return True if output exists and force is False (should skip)."""
+    """Return True if output exists and force is False (should skip).
+
+    .. deprecated:: Use :func:`check_step_cache` for per-step caching.
+    """
     if out_path.exists() and not force:
         has_content = any(out_path.iterdir()) if out_path.is_dir() else out_path.stat().st_size > 0
         if has_content:
@@ -46,3 +49,8 @@ def check_cache(out_path: Path, force: bool) -> bool:
             console.print("[dim]Use -f to force re-conversion[/dim]")
             return True
     return False
+
+
+def check_step_cache(out_dir: Path, filename: str, force: bool) -> bool:
+    """Return True if a specific step output file exists and force is False."""
+    return (out_dir / filename).exists() and not force
