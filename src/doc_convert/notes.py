@@ -277,6 +277,35 @@ KNOWN_FOLDERS = """- professional/: Work meetings, projects, partners, proposals
 - personal/: Personal notes, ideas"""
 
 
+def _list_folders(api_base: str, token: str) -> str:
+    """Fetch real folder list from Notes API.
+
+    Returns formatted string like KNOWN_FOLDERS. Falls back to KNOWN_FOLDERS on error.
+    """
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.get(
+                f"{api_base}/api/v1/folders",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        folders = data.get("folders", data if isinstance(data, list) else [])
+        if not folders:
+            logger.warning("Notes API returned empty folder list, using fallback")
+            return KNOWN_FOLDERS
+        lines = []
+        for f in folders:
+            path = f.get("path", "")
+            desc = f.get("description", "")
+            if path:
+                lines.append(f"- {path}/: {desc}" if desc else f"- {path}/")
+        return "\n".join(lines)
+    except Exception:
+        logger.warning("Failed to list folders from Notes API, using fallback", exc_info=True)
+        return KNOWN_FOLDERS
+
+
 def _search_similar(api_base: str, token: str, query: str, *, mode: str = "vector") -> list[dict]:
     """Search for existing notes similar to the given content.
 
@@ -336,13 +365,16 @@ def _generate_note_metadata(
     document_content: str,
     lang: str | None,
     settings: Settings,
+    *,
+    api_base: str,
+    token: str,
 ) -> dict:
     """Call Gemini Flash to generate {path, title, tags, type}."""
     from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
 
     note_model = get_prompt("notes", "model", NOTE_MODEL)
     note_prompt = get_prompt("notes", "system_prompt", NOTE_SYSTEM_PROMPT)
-    folders = get_prompt("notes", "known_folders", KNOWN_FOLDERS)
+    folders = _list_folders(api_base, token)
     routing_rules = get_prompt("notes", "routing_rules", DEFAULT_ROUTING_RULES)
     system = note_prompt.format(folders=folders, routing_rules=routing_rules)
     if lang:
@@ -574,7 +606,7 @@ def create_note_from_conversion(
         source_stem = output_dir.name.replace("_docling", "")
 
         # Generate note metadata via Gemini Flash (path, title, tags, type only)
-        note_data = _generate_note_metadata(content, lang, settings)
+        note_data = _generate_note_metadata(content, lang, settings, api_base=api_base, token=token)
 
         # Use analysis.md as the note content directly
         note_data["content"] = content
