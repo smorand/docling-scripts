@@ -579,6 +579,7 @@ def create_note_from_conversion(
     companion_name_override: str | None = None,
     lang: str | None = None,
     similarity_threshold: float = 0.85,
+    note_force: bool = False,
 ) -> bool:
     """Main entry point: read conversion output, generate metadata, store note, upload attachments.
 
@@ -622,20 +623,21 @@ def create_note_from_conversion(
         logger.info("Note: path=%s, title=%s", note_data["path"], note_data.get("title"))
 
         # Check for duplicate: exact path match (deterministic = reliable)
-        with httpx.Client(timeout=30.0) as client:
-            check_resp = client.get(
-                f"{api_base}/api/v1/notes",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"path": note_data["path"]},
-            )
-        if check_resp.is_success:
-            logger.warning("Note: already exists at path %s. Skipping.", note_data["path"])
-            console.print(f"  [yellow]Note already exists:[/yellow] {note_data['path']}")
-            console.print("  [dim]Use -f to force creation[/dim]")
-            return False
+        if not note_force:
+            with httpx.Client(timeout=30.0) as client:
+                check_resp = client.get(
+                    f"{api_base}/api/v1/notes",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"path": note_data["path"]},
+                )
+            if check_resp.is_success:
+                logger.warning("Note: already exists at path %s. Skipping.", note_data["path"])
+                console.print(f"  [yellow]Note already exists:[/yellow] {note_data['path']}")
+                console.print("  [dim]Use --note-force to force creation[/dim]")
+                return False
 
         # Check for semantic duplicates via vector search (catches similar notes under different paths)
-        if content:
+        if content and not note_force:
             with trace_span("note.search_similar"):
                 similar = _search_similar(api_base, token, content, mode="vector")
             if similar:
@@ -651,7 +653,7 @@ def create_note_from_conversion(
                         f"  [yellow]Similar note exists:[/yellow] {top.get('path')} "
                         f"(title: {top.get('title')}, score: {score:.2f})"
                     )
-                    console.print("  [dim]Use -f to force creation[/dim]")
+                    console.print("  [dim]Use --note-force to force creation[/dim]")
                     return False
                 logger.info("Note: no strong duplicate found (top score: %.2f)", score)
 

@@ -128,6 +128,11 @@ def main(  # noqa: PLR0912, PLR0915
         "--similarity-threshold",
         help="Similarity score threshold for note deduplication (0.0-1.0)",
     ),
+    note_force: bool = typer.Option(
+        False,
+        "--note-force",
+        help="Force note creation even if a similar note exists",
+    ),
     force: bool = typer.Option(
         False,
         "-f",
@@ -198,6 +203,7 @@ def main(  # noqa: PLR0912, PLR0915
             settings,
             companion_name_override=document,
             note=note,
+            note_force=note_force,
             similarity_threshold=similarity_threshold,
         )
         raise typer.Exit()
@@ -273,11 +279,16 @@ def main(  # noqa: PLR0912, PLR0915
                     and eml_converter.run_analysis(use_external_llm, instructions, meeting, lang, depth=analysis_depth)
                 ):
                     console.print("  analysis.md")
-                if note and not check_step_cache(out_dir, "note_sent", force):
+                if note and not check_step_cache(out_dir, "note_sent", note_force):
                     from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
                     create_note_from_conversion(
-                        out_dir, settings, source_path=doc_path, lang=lang, similarity_threshold=similarity_threshold
+                        out_dir,
+                        settings,
+                        source_path=doc_path,
+                        lang=lang,
+                        similarity_threshold=similarity_threshold,
+                        note_force=note_force,
                     )
                 raise typer.Exit()
             if is_audio_ext(ext):
@@ -385,7 +396,7 @@ def main(  # noqa: PLR0912, PLR0915
             console.print("  analysis.md")
 
         # Step 3: Note (skip if note_sent exists)
-        if note and not check_step_cache(out_dir, "note_sent", force):
+        if note and not check_step_cache(out_dir, "note_sent", note_force):
             from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
             create_note_from_conversion(
@@ -410,6 +421,7 @@ def _run_media(
     *,
     companion_name_override: str | None = None,
     note: bool = False,
+    note_force: bool = False,
     similarity_threshold: float = 0.85,
 ) -> None:
     """Dispatch to MediaConverter with independent step caching."""
@@ -447,7 +459,7 @@ def _run_media(
         console.print("  analysis.md")
 
     # Step 3: Note (skip if note_sent exists)
-    if note and not check_step_cache(output_dir, "note_sent", force):
+    if note and not check_step_cache(output_dir, "note_sent", note_force):
         from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
         create_note_from_conversion(
@@ -457,4 +469,5 @@ def _run_media(
             companion_name_override=companion_name_override,
             lang=lang,
             similarity_threshold=similarity_threshold,
+            note_force=note_force,
         )
