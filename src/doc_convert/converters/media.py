@@ -92,7 +92,12 @@ class MediaConverter(BaseConverter):
             a_prompt, a_system = video_analysis(meeting_ctx)
 
         if lang:
-            a_system = f"IMPORTANT: Write your entire response in {lang}.\n\n{a_system}"
+            lang_rule = (
+                f"HARD RULE: Write the ENTIRE response in {lang}, including all section headings, "
+                f"table headers, and content. Do NOT switch language even if the source material or "
+                f"injected context is in another language."
+            )
+            a_system = f"{lang_rule}\n\n{a_system}\n\n{lang_rule}"
 
         with trace_span(f"{self.media_type}.analyze", file=self.source.name, provider=provider):
             analysis_md = process_media(self.source, provider, model, a_prompt, api_key, system_prompt=a_system)

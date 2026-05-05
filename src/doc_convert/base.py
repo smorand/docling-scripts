@@ -248,7 +248,12 @@ class BaseConverter(ABC):
         if meeting:
             system = f"Context: {meeting}\n\n{system}"
         if lang:
-            system = f"IMPORTANT: Write your entire response in {lang}.\n\n{system}"
+            lang_rule = (
+                f"HARD RULE: Write the ENTIRE response in {lang}, including all section headings, "
+                f"table headers, and content. Do NOT switch language even if the source material or "
+                f"injected context is in another language."
+            )
+            system = f"{lang_rule}\n\n{system}\n\n{lang_rule}"
 
         with trace_span("document.analyze", file=self.source.name, provider=provider):
             logger.info("Analyzing %s with %s/%s", self.source.name, provider, model)

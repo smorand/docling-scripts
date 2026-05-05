@@ -256,12 +256,25 @@ def build_companion_bundle(companion_path: Path, output_dir: Path, settings: Set
     return "\n".join(parts)
 
 
-def analyze_companion(bundle: str, provider: str, model: str, api_key: str) -> str:
+def analyze_companion(
+    bundle: str,
+    provider: str,
+    model: str,
+    api_key: str,
+    *,
+    lang: str | None = None,
+) -> str:
     """Run lightweight LLM pre-analysis on the companion bundle.
 
     Extracts attendees, agenda, key terms, referenced doc summaries.
+    When lang is set, the entire output is forced to that language.
     """
     from doc_convert.providers import PROVIDER_URLS  # noqa: PLC0415
+
+    system = _get_companion_prompt()
+    if lang:
+        lang_rule = f"HARD RULE: Write the ENTIRE response in {lang}, including all section headings and content."
+        system = f"{lang_rule}\n\n{system}\n\n{lang_rule}"
 
     with trace_span("companion.analyze", provider=provider, model=model):
         logger.info("Companion: analyzing context with %s/%s", provider, model)
@@ -272,7 +285,7 @@ def analyze_companion(bundle: str, provider: str, model: str, api_key: str) -> s
                 json={
                     "model": model,
                     "messages": [
-                        {"role": "system", "content": _get_companion_prompt()},
+                        {"role": "system", "content": system},
                         {"role": "user", "content": f"Extract context from these notes:\n\n{bundle}"},
                     ],
                 },
@@ -280,6 +293,18 @@ def analyze_companion(bundle: str, provider: str, model: str, api_key: str) -> s
             resp.raise_for_status()
 
     return resp.json()["choices"][0]["message"]["content"]
+
+
+_LANG_SENTINEL_RE = re.compile(r"^<!--\s*doc-convert:lang=([\w-]*)\s*-->\s*\n?")
+
+
+def _read_cached_companion(cache_path: Path) -> tuple[str | None, str]:
+    """Read cached companion context, returning (cached_lang, body_without_sentinel)."""
+    raw = cache_path.read_text()
+    match = _LANG_SENTINEL_RE.match(raw)
+    if match:
+        return (match.group(1) or None, raw[match.end() :])
+    return (None, raw)
 
 
 def load_companion_context(
@@ -290,6 +315,7 @@ def load_companion_context(
     *,
     force: bool = False,
     name_override: str | None = None,
+    lang: str | None = None,
 ) -> str | None:
     """Main entry point: detect, load, analyze, cache, and return companion context.
 
@@ -303,6 +329,8 @@ def load_companion_context(
         settings: Application settings
         force: Force re-analysis even if cached
         name_override: For --start-audio, the name to search for (e.g. "Meeting Name")
+        lang: Output language for the companion context (e.g. "fr"). When set,
+            invalidates cache if previously generated in a different language.
     """
     try:
         companion_path = detect_companion(source_path, name_override=name_override)
@@ -311,11 +339,14 @@ def load_companion_context(
 
         logger.info("Companion file found: %s", companion_path.name)
 
-        # Check cache
+        # Check cache (invalidate if language changed)
         cache_path = output_dir / "companion_context.md"
         if cache_path.exists() and not force:
-            logger.info("Companion: using cached context from %s", cache_path.name)
-            return cache_path.read_text()
+            cached_lang, cached_body = _read_cached_companion(cache_path)
+            if cached_lang == (lang or None):
+                logger.info("Companion: using cached context from %s", cache_path.name)
+                return cached_body
+            logger.info("Companion: cache lang=%r differs from requested %r, regenerating", cached_lang, lang)
 
         # Build bundle (companion + referenced files)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -325,10 +356,11 @@ def load_companion_context(
         from doc_convert.providers import resolve_media_llm  # noqa: PLC0415
 
         provider, model, api_key = resolve_media_llm(use_external_llm, settings)
-        context = analyze_companion(bundle, provider, model, api_key)
+        context = analyze_companion(bundle, provider, model, api_key, lang=lang)
 
-        # Cache result
-        cache_path.write_text(context)
+        # Cache result with language sentinel
+        sentinel = f"<!-- doc-convert:lang={lang or ''} -->\n"
+        cache_path.write_text(sentinel + context)
         logger.info("Companion: context cached to %s", cache_path)
         console.print(f"  [dim]companion_context.md (from {companion_path.name})[/dim]")
 

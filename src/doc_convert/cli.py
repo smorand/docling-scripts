@@ -338,7 +338,7 @@ def main(  # noqa: PLR0912, PLR0915
         # ── Companion file detection ────────────────────────────────────
         from doc_convert.companion import load_companion_context  # noqa: PLC0415
 
-        companion_ctx = load_companion_context(doc_path, out_dir, use_external_llm, settings, force=force)
+        companion_ctx = load_companion_context(doc_path, out_dir, use_external_llm, settings, force=force, lang=lang)
         if companion_ctx:
             meeting = f"{companion_ctx}\n\n{meeting}" if meeting else companion_ctx
 
@@ -430,7 +430,13 @@ def _run_media(
     from doc_convert.output import check_step_cache  # noqa: PLC0415
 
     companion_ctx = load_companion_context(
-        media_path, output_dir, use_external_llm, settings, force=force, name_override=companion_name_override
+        media_path,
+        output_dir,
+        use_external_llm,
+        settings,
+        force=force,
+        name_override=companion_name_override,
+        lang=lang,
     )
     if companion_ctx:
         meeting = f"{companion_ctx}\n\n{meeting}" if meeting else companion_ctx
