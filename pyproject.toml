@@ -45,9 +45,6 @@ build-backend = "hatchling.build"
 sources = ["src"]
 only-include = ["src"]
 
-[tool.uv.sources]
-docling = { path = "/Users/sebastien/Documents/Projects/External/docling", editable = true }
-
 # Ruff (Linting + Formatting)
 [tool.ruff]
 target-version = "py310"
