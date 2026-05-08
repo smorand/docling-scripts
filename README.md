@@ -44,7 +44,7 @@ doc-convert slides.pptx
 # XLSX
 doc-convert spreadsheet.xlsx
 
-# Audio: transcription (requires external LLM, auto: openrouter/google/gemini-2.5-flash)
+# Audio: transcription (requires external LLM, auto: google/gemini-3-pro-preview)
 doc-convert meeting.ogg                                 # → meeting_docling/document.md
 doc-convert meeting.ogg --analyze                       # + analysis.md
 doc-convert meeting.ogg --analyze -i "Focus on action items only"
@@ -91,7 +91,7 @@ doc-convert document.pdf -o /custom/output              # override output direct
 | Google GenAI | `google/<model>` | `GOOGLE_API_KEY` |
 | OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` |
 
-Audio and video default to `openrouter/google/gemini-2.5-flash` if `--use-external-llm` is not specified.
+Audio and video default to `google/gemini-3-pro-preview` if `--use-external-llm` is not specified.
 
 ### System Dependencies
 

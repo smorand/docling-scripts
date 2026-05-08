@@ -40,7 +40,7 @@ PROVIDER_URLS: dict[str, str] = {
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
 }
 
-DEFAULT_MEDIA_LLM = "google/gemini-3.1-flash-lite-preview"
+DEFAULT_MEDIA_LLM = "google/gemini-3-pro-preview"
 
 
 def parse_external_llm(value: str) -> tuple[str, str]:
