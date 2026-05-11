@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import sys
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,21 @@ LOG_DIR = Path.home() / ".local" / "share" / "doc-convert"
 # Suppress noisy third-party warnings
 warnings.filterwarnings("ignore", message="Palette images with Transparency", category=UserWarning)
 warnings.filterwarnings("ignore", message="Passing `generation_config` together with generation-related")
+
+# Docling caches VLM pipelines globally; their __del__ runs at interpreter shutdown
+# and tries to log via Rich, which fails because imports are already torn down.
+# Filter that specific shutdown-time noise from the unraisable hook.
+_original_unraisablehook = sys.unraisablehook
+
+
+def _filtered_unraisablehook(unraisable: object, /) -> None:
+    exc = getattr(unraisable, "exc_value", None)
+    if isinstance(exc, ImportError) and "sys.meta_path is None" in str(exc):
+        return
+    _original_unraisablehook(unraisable)  # type: ignore[arg-type]
+
+
+sys.unraisablehook = _filtered_unraisablehook
 
 
 def setup_logging(*, verbose: int = 0, quiet: bool = False, source_path: str | None = None) -> None:
