@@ -57,7 +57,7 @@ def main(  # noqa: PLR0912, PLR0915
     use_external_llm: str | None = typer.Option(
         None,
         "--use-external-llm",
-        help="External LLM provider: google/<model> or openrouter/<model>",
+        help="External LLM provider: google/<model>, openrouter/<model>, or ibm/<model>",
     ),
     vlm_preset: VlmPreset = typer.Option(
         VlmPreset.smolvlm,

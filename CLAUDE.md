@@ -57,7 +57,8 @@ src/
 - Logging: Rich + logging module (not print)
 - Six conversion paths: PDF local, PDF/Image external LLM, PPTX (Docling + python-pptx + VLM), DOCX (Docling + VLM images), XLSX native, Audio (transcription via external LLM), Video (extraction via external LLM)
 - Offline by default for documents: VLM models pre-downloaded to ~/.cache/models
-- Audio/video require external LLM (default: google/gemini-3-pro-preview)
+- Audio/video require external LLM (default: ibm/gemini-3-pro-preview)
+- External LLM providers: `google/<model>` (GenAI), `openrouter/<model>`, `ibm/<model>` (OpenAI-compatible; `IBM_ICA_MODEL_KEY` + `IBM_ICA_BASE_URL`). IBM uses base64 inline for audio/video (no Files API).
 - Cache: skip conversion if output exists, use -f to force
 - Unified output: all conversions output to `<name>_docling/document.md`
 

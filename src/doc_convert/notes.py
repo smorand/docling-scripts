@@ -25,7 +25,7 @@ from pathlib import Path
 import httpx
 
 from config import Settings  # noqa: TC001
-from doc_convert.providers import PROVIDER_URLS
+from doc_convert.providers import get_provider_url
 from logging_config import console
 from tracing import trace_span
 
@@ -391,7 +391,7 @@ def _generate_note_metadata(
         logger.info("Generating note metadata with %s", note_model)
         with httpx.Client(timeout=120.0) as client:
             resp = client.post(
-                PROVIDER_URLS[provider],
+                get_provider_url(provider, settings),
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",

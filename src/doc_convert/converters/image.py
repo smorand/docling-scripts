@@ -24,12 +24,12 @@ def convert_image_to_markdown(doc_path: Path, provider: str, model: str, setting
     )
     from docling.pipeline.vlm_pipeline import VlmPipeline  # noqa: PLC0415
 
-    from doc_convert.providers import PROVIDER_URLS, get_external_llm_prompt, require_api_key  # noqa: PLC0415
+    from doc_convert.providers import get_external_llm_prompt, get_provider_url, require_api_key  # noqa: PLC0415
     from tracing import trace_span  # noqa: PLC0415
 
     api_key = require_api_key(provider, settings)
     vlm_opts = ApiVlmOptions(
-        url=PROVIDER_URLS[provider],
+        url=get_provider_url(provider, settings),
         params={"model": model, "max_tokens": settings.llm_max_tokens},
         headers={"Authorization": f"Bearer {api_key}"},
         prompt=get_external_llm_prompt(),

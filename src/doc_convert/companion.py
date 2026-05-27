@@ -261,6 +261,7 @@ def analyze_companion(
     provider: str,
     model: str,
     api_key: str,
+    settings: Settings,
     *,
     lang: str | None = None,
 ) -> str:
@@ -269,7 +270,7 @@ def analyze_companion(
     Extracts attendees, agenda, key terms, referenced doc summaries.
     When lang is set, the entire output is forced to that language.
     """
-    from doc_convert.providers import PROVIDER_URLS  # noqa: PLC0415
+    from doc_convert.providers import get_provider_url  # noqa: PLC0415
 
     system = _get_companion_prompt()
     if lang:
@@ -280,7 +281,7 @@ def analyze_companion(
         logger.info("Companion: analyzing context with %s/%s", provider, model)
         with httpx.Client(timeout=120.0) as client:
             resp = client.post(
-                PROVIDER_URLS[provider],
+                get_provider_url(provider, settings),
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={
                     "model": model,
@@ -356,7 +357,7 @@ def load_companion_context(
         from doc_convert.providers import resolve_media_llm  # noqa: PLC0415
 
         provider, model, api_key = resolve_media_llm(use_external_llm, settings)
-        context = analyze_companion(bundle, provider, model, api_key, lang=lang)
+        context = analyze_companion(bundle, provider, model, api_key, settings, lang=lang)
 
         # Cache result with language sentinel
         sentinel = f"<!-- doc-convert:lang={lang or ''} -->\n"

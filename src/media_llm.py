@@ -1,8 +1,9 @@
 """Direct LLM client for audio/video processing.
 
-Supports two providers:
+Supports three providers:
 - google: Gemini Files API (upload → poll → generate → cleanup)
 - openrouter: base64 inline in chat completions
+- ibm: base64 inline in chat completions (IBM ICA, OpenAI-compatible)
 """
 
 from __future__ import annotations
@@ -228,8 +229,13 @@ def process_media_openrouter(
     api_key: str,
     *,
     system_prompt: str | None = None,
+    url: str = OPENROUTER_API_URL,
+    provider_label: str = "openrouter",
 ) -> str:
-    """Process audio/video via OpenRouter with base64 inline."""
+    """Process audio/video via an OpenAI-compatible endpoint with base64 inline.
+
+    Used by OpenRouter and IBM ICA (and any other chat-completions provider).
+    """
     mime_type = get_media_mime(file_path)
     b64_data = base64.b64encode(file_path.read_bytes()).decode()
 
@@ -262,11 +268,11 @@ def process_media_openrouter(
         }
     )
 
-    with trace_span("openrouter.generate", model=model, media_type="audio" if is_audio else "video"):
-        logger.info("Sending %s to OpenRouter (%s, %s)", file_path.name, model, mime_type)
+    with trace_span(f"{provider_label}.generate", model=model, media_type="audio" if is_audio else "video"):
+        logger.info("Sending %s to %s (%s, %s)", file_path.name, provider_label, model, mime_type)
         with httpx.Client(timeout=600.0) as client:
             resp = client.post(
-                OPENROUTER_API_URL,
+                url,
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
@@ -277,20 +283,21 @@ def process_media_openrouter(
                 if resp.status_code == 502:  # noqa: PLR2004
                     size_mb = file_path.stat().st_size / (1024 * 1024)
                     logger.error(
-                        "OpenRouter returned 502: file too large (%.1f MB as base64). "
+                        "%s returned 502: file too large (%.1f MB as base64). "
                         "Use google/ provider with Files API instead.",
+                        provider_label,
                         size_mb,
                     )
                     msg = (
-                        f"File too large for OpenRouter ({size_mb:.0f} MB as base64 payload).\n"
-                        "OpenRouter has payload size limits for inline media.\n\n"
+                        f"File too large for {provider_label} ({size_mb:.0f} MB as base64 payload).\n"
+                        "Inline media providers have payload size limits.\n\n"
                         "Use the google/ provider instead (uploads via Files API, no size limit):\n"
                         f"  doc-convert {file_path.name} --use-external-llm google/gemini-2.5-flash\n"
                         "  (requires GOOGLE_API_KEY env var)"
                     )
                     raise RuntimeError(msg)
                 error_body = resp.text[:500]
-                logger.error("OpenRouter error %d: %s", resp.status_code, error_body)
+                logger.error("%s error %d: %s", provider_label, resp.status_code, error_body)
                 resp.raise_for_status()
 
     return resp.json()["choices"][0]["message"]["content"]
@@ -307,11 +314,23 @@ def process_media(
     api_key: str,
     *,
     system_prompt: str | None = None,
+    url: str | None = None,
 ) -> str:
-    """Process audio/video with the specified provider."""
+    """Process audio/video with the specified provider.
+
+    `url` is required for `ibm` (and any other OpenAI-compatible provider with
+    a non-default endpoint); ignored for `google`.
+    """
     if provider == "google":
         return process_media_google(file_path, model, prompt, api_key, system_prompt=system_prompt)
     if provider == "openrouter":
         return process_media_openrouter(file_path, model, prompt, api_key, system_prompt=system_prompt)
+    if provider == "ibm":
+        if not url:
+            msg = "ibm provider requires `url` (resolve via providers.get_provider_url)"
+            raise ValueError(msg)
+        return process_media_openrouter(
+            file_path, model, prompt, api_key, system_prompt=system_prompt, url=url, provider_label="ibm"
+        )
     msg = f"Unsupported provider for media: {provider}"
     raise ValueError(msg)

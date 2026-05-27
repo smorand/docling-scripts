@@ -84,14 +84,17 @@ doc-convert document.pdf -o /custom/output              # override output direct
 
 ### External LLM Providers
 
-`--use-external-llm` supports two providers:
+`--use-external-llm` supports three providers:
 
-| Provider | Format | API Key |
-|---|---|---|
-| Google GenAI | `google/<model>` | `GOOGLE_API_KEY` |
-| OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` |
+| Provider | Format | API Key | Extra |
+|---|---|---|---|
+| Google GenAI | `google/<model>` | `GOOGLE_API_KEY` | |
+| OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` | |
+| IBM ICA (OpenAI-compatible) | `ibm/<model>` | `IBM_ICA_MODEL_KEY` | requires `IBM_ICA_BASE_URL` |
 
-Audio and video default to `google/gemini-3-pro-preview` if `--use-external-llm` is not specified.
+Audio and video default to `ibm/gemini-3-pro-preview` if `--use-external-llm` is not specified.
+
+For IBM ICA, audio/video files are sent inline (base64) via the chat completions endpoint; the Gemini Files API is not used. For large media, prefer the `google/` provider.
 
 ### System Dependencies
 
@@ -107,6 +110,8 @@ Audio and video default to `google/gemini-3-pro-preview` if `--use-external-llm`
 | `MODELS_PATH` | Local VLM | Model cache directory (default: `~/.cache/models`) |
 | `GOOGLE_API_KEY` | `google/` provider | Google GenAI API key |
 | `OPENROUTER_API_KEY` | `openrouter/` provider | OpenRouter API key |
+| `IBM_ICA_MODEL_KEY` | `ibm/` provider | IBM ICA API key (OpenAI-compatible) |
+| `IBM_ICA_BASE_URL` | `ibm/` provider | IBM ICA base URL (e.g. `https://api.nextgen-beta.ica.ibm.com/ica/v1`) |
 | `GOOGLE_CREDENTIALS` | Google Docs/Sheets URLs | Path to Google credentials JSON |
 
 ## Development

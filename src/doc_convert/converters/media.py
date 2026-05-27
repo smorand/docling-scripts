@@ -33,12 +33,13 @@ class MediaConverter(BaseConverter):
         self.use_external_llm = use_external_llm
 
     def convert(self) -> None:
-        from doc_convert.providers import resolve_media_llm  # noqa: PLC0415
+        from doc_convert.providers import get_provider_url, resolve_media_llm  # noqa: PLC0415
         from media_llm import process_media  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415
 
         self.ensure_output_dir()
         provider, model, api_key = resolve_media_llm(self.use_external_llm, self.options.settings)
+        url = get_provider_url(provider, self.options.settings) if provider != "google" else None
 
         if self.media_type == "audio":
             from audio import build_transcription_prompt  # noqa: PLC0415
@@ -52,7 +53,7 @@ class MediaConverter(BaseConverter):
             span_name = "video.extract"
 
         with trace_span(span_name, file=self.source.name, provider=provider):
-            md = process_media(self.source, provider, model, prompt, api_key, system_prompt=system)
+            md = process_media(self.source, provider, model, prompt, api_key, system_prompt=system, url=url)
         if self.meeting:
             md = f"# {self.meeting}\n\n{md}"
         self.write_document_md(md)
@@ -69,7 +70,7 @@ class MediaConverter(BaseConverter):
 
         Returns True if analysis was written.
         """
-        from doc_convert.providers import resolve_media_llm  # noqa: PLC0415
+        from doc_convert.providers import get_provider_url, resolve_media_llm  # noqa: PLC0415
         from media_llm import process_media  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415
 
@@ -77,6 +78,7 @@ class MediaConverter(BaseConverter):
             return False
 
         provider, model, api_key = resolve_media_llm(use_external_llm, self.options.settings)
+        url = get_provider_url(provider, self.options.settings) if provider != "google" else None
         meeting_ctx = meeting or self.meeting
 
         if instructions:
@@ -100,7 +102,9 @@ class MediaConverter(BaseConverter):
             a_system = f"{lang_rule}\n\n{a_system}\n\n{lang_rule}"
 
         with trace_span(f"{self.media_type}.analyze", file=self.source.name, provider=provider):
-            analysis_md = process_media(self.source, provider, model, a_prompt, api_key, system_prompt=a_system)
+            analysis_md = process_media(
+                self.source, provider, model, a_prompt, api_key, system_prompt=a_system, url=url
+            )
         if meeting_ctx:
             analysis_md = f"# {meeting_ctx}\n\n{analysis_md}"
         (self.output_dir / "analysis.md").write_text(analysis_md)

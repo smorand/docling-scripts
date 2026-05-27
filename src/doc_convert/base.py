@@ -218,7 +218,7 @@ class BaseConverter(ABC):
         """
         import httpx  # noqa: PLC0415
 
-        from doc_convert.providers import PROVIDER_URLS, resolve_media_llm  # noqa: PLC0415
+        from doc_convert.providers import get_provider_url, resolve_media_llm  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415
 
         doc_md_path = self.output_dir / "document.md"
@@ -259,7 +259,7 @@ class BaseConverter(ABC):
             logger.info("Analyzing %s with %s/%s", self.source.name, provider, model)
             with httpx.Client(timeout=300.0) as client:
                 resp = client.post(
-                    PROVIDER_URLS[provider],
+                    get_provider_url(provider, self.options.settings),
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     json={
                         "model": model,

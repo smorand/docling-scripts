@@ -35,12 +35,29 @@ def get_external_llm_prompt() -> str:
 # Keep module-level alias for backward compat (used by image.py)
 EXTERNAL_LLM_PROMPT = _DEFAULT_LLM_PROMPT
 
+# Static URLs for providers with a fixed endpoint. `ibm` is dynamic, resolved
+# at runtime from settings.ibm_ica_base_url. Use get_provider_url() to read.
 PROVIDER_URLS: dict[str, str] = {
     "google": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
 }
 
-DEFAULT_MEDIA_LLM = "google/gemini-3-pro-preview"
+SUPPORTED_PROVIDERS: tuple[str, ...] = ("google", "openrouter", "ibm")
+
+DEFAULT_MEDIA_LLM = "ibm/gemini-3-pro-preview"
+
+
+def get_provider_url(provider: str, settings: Settings) -> str:
+    """Return the OpenAI-compatible chat completions URL for a provider."""
+    if provider in PROVIDER_URLS:
+        return PROVIDER_URLS[provider]
+    if provider == "ibm":
+        if not settings.ibm_ica_base_url:
+            console.print("[red]IBM_ICA_BASE_URL env var is required for ibm/ provider[/red]")
+            raise typer.Exit(1)
+        return f"{settings.ibm_ica_base_url.rstrip('/')}/chat/completions"
+    console.print(f"[red]Unknown provider: {provider}[/red]")
+    raise typer.Exit(1)
 
 
 def parse_external_llm(value: str) -> tuple[str, str]:
@@ -49,8 +66,9 @@ def parse_external_llm(value: str) -> tuple[str, str]:
     Examples:
         google/gemini-3-flash-preview -> ("google", "gemini-3-flash-preview")
         openrouter/google/gemini-3-pro-preview -> ("openrouter", "google/gemini-3-pro-preview")
+        ibm/gemini-3-pro-preview -> ("ibm", "gemini-3-pro-preview")
     """
-    for provider in PROVIDER_URLS:
+    for provider in SUPPORTED_PROVIDERS:
         prefix = f"{provider}/"
         if value.startswith(prefix):
             model = value[len(prefix) :]
@@ -58,7 +76,7 @@ def parse_external_llm(value: str) -> tuple[str, str]:
                 console.print(f"[red]Missing model name after '{prefix}'[/red]")
                 raise typer.Exit(1)
             return provider, model
-    supported = ", ".join(f"{p}/<model>" for p in PROVIDER_URLS)
+    supported = ", ".join(f"{p}/<model>" for p in SUPPORTED_PROVIDERS)
     console.print(f"[red]Unknown provider in '{value}'. Supported: {supported}[/red]")
     raise typer.Exit(1)
 
@@ -75,6 +93,11 @@ def require_api_key(provider: str, settings: Settings) -> str:
             console.print("[red]OPENROUTER_API_KEY env var is required for openrouter/ provider[/red]")
             raise typer.Exit(1)
         return settings.openrouter_api_key
+    if provider == "ibm":
+        if not settings.ibm_ica_model_key:
+            console.print("[red]IBM_ICA_MODEL_KEY env var is required for ibm/ provider[/red]")
+            raise typer.Exit(1)
+        return settings.ibm_ica_model_key
     console.print(f"[red]Unknown provider: {provider}[/red]")
     raise typer.Exit(1)
 
