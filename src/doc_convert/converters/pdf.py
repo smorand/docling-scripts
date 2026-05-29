@@ -40,6 +40,15 @@ class PdfConverter(BaseConverter):
             do_picture_classification=self.options.figures,
         )
 
+        if self.options.cpu:
+            from docling.datamodel.accelerator_options import (  # noqa: PLC0415
+                AcceleratorDevice,
+                AcceleratorOptions,
+            )
+
+            pipeline_options.accelerator_options = AcceleratorOptions(device=AcceleratorDevice.CPU)
+            logger.info("Forcing CPU accelerator for Docling pipeline")
+
         if self.options.vlm:
             pipeline_options.picture_description_options = PictureDescriptionVlmEngineOptions.from_preset(
                 self.options.vlm_preset

@@ -49,6 +49,7 @@ class ConvertOptions:
     figures: bool = True
     all_formats: bool = False
     do_ocr: bool = True
+    cpu: bool = False
     external_llm: tuple[str, str] | None = None
     settings: Settings = field(default_factory=Settings)
 

@@ -79,6 +79,11 @@ def main(  # noqa: PLR0912, PLR0915
         "--no-figures",
         help="Skip figure extraction (text + tables only, faster)",
     ),
+    cpu: bool = typer.Option(
+        False,
+        "--cpu",
+        help="Force CPU for the Docling pipeline (workaround for MPS float64 errors on Apple Silicon)",
+    ),
     all_formats: bool = typer.Option(
         False,
         "--all",
@@ -349,6 +354,7 @@ def main(  # noqa: PLR0912, PLR0915
             figures=not no_figures,
             all_formats=all_formats,
             do_ocr=not no_ocr,
+            cpu=cpu,
             external_llm=ext_llm,
             settings=settings,
         )
