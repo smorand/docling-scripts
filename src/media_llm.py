@@ -292,7 +292,7 @@ def process_media_openrouter(
                         f"File too large for {provider_label} ({size_mb:.0f} MB as base64 payload).\n"
                         "Inline media providers have payload size limits.\n\n"
                         "Use the google/ provider instead (uploads via Files API, no size limit):\n"
-                        f"  doc-convert {file_path.name} --use-external-llm google/gemini-2.5-flash\n"
+                        f"  doc-convert {file_path.name} --use-external-llm google/gemini-3.1-pro-preview\n"
                         "  (requires GOOGLE_API_KEY env var)"
                     )
                     raise RuntimeError(msg)

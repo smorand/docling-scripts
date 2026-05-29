@@ -44,7 +44,11 @@ PROVIDER_URLS: dict[str, str] = {
 
 SUPPORTED_PROVIDERS: tuple[str, ...] = ("google", "openrouter", "ibm")
 
-DEFAULT_MEDIA_LLM = "ibm/gemini-3-pro-preview"
+# Default uses google/ (Gemini Files API: upload → generate), which has no
+# payload size limit. Inline-base64 providers (ibm/, openrouter/) fail with 502
+# on large audio/video recordings. gemini-3-pro-preview was retired on the Google
+# API ("no longer available"); gemini-3.1-pro-preview is its current successor.
+DEFAULT_MEDIA_LLM = "google/gemini-3.1-pro-preview"
 
 
 def get_provider_url(provider: str, settings: Settings) -> str:

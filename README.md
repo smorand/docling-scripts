@@ -44,7 +44,7 @@ doc-convert slides.pptx
 # XLSX
 doc-convert spreadsheet.xlsx
 
-# Audio: transcription (requires external LLM, auto: google/gemini-3-pro-preview)
+# Audio: transcription (requires external LLM, auto: google/gemini-3.1-pro-preview)
 doc-convert meeting.ogg                                 # → meeting_docling/document.md
 doc-convert meeting.ogg --analyze                       # + analysis.md
 doc-convert meeting.ogg --analyze -i "Focus on action items only"
@@ -92,9 +92,9 @@ doc-convert document.pdf -o /custom/output              # override output direct
 | OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` | |
 | IBM ICA (OpenAI-compatible) | `ibm/<model>` | `IBM_ICA_MODEL_KEY` | requires `IBM_ICA_BASE_URL` |
 
-Audio and video default to `ibm/gemini-3-pro-preview` if `--use-external-llm` is not specified.
+Audio and video default to `google/gemini-3.1-pro-preview` if `--use-external-llm` is not specified. The `google/` provider uploads media via the Gemini Files API, so there is no payload size limit.
 
-For IBM ICA, audio/video files are sent inline (base64) via the chat completions endpoint; the Gemini Files API is not used. For large media, prefer the `google/` provider.
+For IBM ICA and OpenRouter, audio/video files are sent inline (base64) via the chat completions endpoint; the Gemini Files API is not used. Large media will fail with a 502, so prefer the `google/` provider (the default) for recordings.
 
 ### System Dependencies
 
