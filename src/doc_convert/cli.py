@@ -65,7 +65,8 @@ def main(
         None,
         "-o",
         "--output",
-        help="Override output directory (default: <name>_docling/)",
+        help="Override output directory. Default: <name>_docling/",
+        show_default=False,
     ),
     llm: str | None = typer.Option(
         None,
@@ -73,28 +74,32 @@ def main(
         help=(
             "Remote LLM as 'provider/model'. Used for captions, analysis, "
             "PDF/image --engine llm, and as the fallback for media when "
-            "--media-llm is not given. Providers: google, openrouter, ibm."
+            "--media-llm is not given. Providers: google, openrouter, ibm. "
+            "Default: unset (each step picks its own default)."
         ),
+        show_default=False,
     ),
     media_llm: str | None = typer.Option(
         None,
         "--media-llm",
         help=(
             "Override the LLM used for audio/video conversion and analysis only. "
-            "Takes precedence over --llm for media. Default: google/gemini-3.1-pro-preview "
-            "(Files API; required for large recordings — IBM/OpenRouter inline-base64 fails on big files)."
+            "Takes precedence over --llm for media. Big recordings require the "
+            "Gemini Files API; IBM and OpenRouter use inline base64 and will "
+            "502 on large files. Default: google/gemini-3.1-pro-preview."
         ),
+        show_default=False,
     ),
     captions: str | None = typer.Option(
         None,
         "--captions",
         help=(
-            "Figure captioner. One of: 'off', a local preset "
-            f"({', '.join(LOCAL_PRESETS)}), or a 'provider/model' slug. "
-            "Default: same as --llm if set, else ibm/claude-haiku-4-5 if IBM ICA "
-            "is configured, else google/gemini-3.1-flash-lite-preview if "
-            "GOOGLE_API_KEY is set, else local smolvlm."
+            f"Figure captioner. One of: 'off', a local preset ({', '.join(LOCAL_PRESETS)}), "
+            "or a 'provider/model' slug. Default: same as --llm if set, else "
+            "ibm/claude-haiku-4-5 if IBM ICA is configured, else "
+            "google/gemini-3.1-flash-lite-preview if GOOGLE_API_KEY is set, else smolvlm."
         ),
+        show_default=False,
     ),
     engine: Engine = typer.Option(
         Engine.LOCAL,
@@ -108,31 +113,37 @@ def main(
         False,
         "--no-ocr",
         help="Disable OCR (PDF only, --engine local)",
+        show_default="off (OCR enabled)",
     ),
     no_figures: bool = typer.Option(
         False,
         "--no-figures",
         help="Skip figure extraction (text + tables only, faster)",
+        show_default="off (figures extracted)",
     ),
     cpu: bool = typer.Option(
         False,
         "--cpu",
         help="Force CPU for the Docling pipeline (workaround for MPS float64 errors on Apple Silicon)",
+        show_default="off (auto-fallback to CPU on MPS errors)",
     ),
     all_formats: bool = typer.Option(
         False,
         "--all",
         help="Export all formats (md, html, json, txt) in addition to document.md",
+        show_default="off",
     ),
     start_audio: bool = typer.Option(
         False,
         "--start-audio",
         help="Record from microphone (Ctrl+C to stop). DOCUMENT becomes the name.",
+        show_default="off",
     ),
     analyze: bool = typer.Option(
         False,
         "--analyze",
         help="Add analysis pass: analysis.md (audio: summary, video: executive brief)",
+        show_default="off",
     ),
     analysis_depth: int = typer.Option(
         5,
@@ -145,23 +156,27 @@ def main(
         None,
         "-m",
         "--meeting",
-        help="Meeting name or context for audio/video prompts",
+        help="Meeting name or context for audio/video prompts. Default: use the audio/video filename stem.",
+        show_default=False,
     ),
     instructions: str | None = typer.Option(
         None,
         "-i",
         "--instructions",
-        help="Custom prompt for --analyze (overrides default analysis prompt)",
+        help="Custom prompt for --analyze (overrides default analysis prompt). Default: built-in analysis prompt.",
+        show_default=False,
     ),
     lang: str | None = typer.Option(
         None,
         "--lang",
-        help="Output language for --analyze (e.g. fr, en). Default: auto-detect from document.",
+        help="Output language for --analyze (e.g. fr, en). Default: auto-detect from source.",
+        show_default=False,
     ),
     note: bool = typer.Option(
         False,
         "--note",
         help="Store a note in the Notes system from the conversion output",
+        show_default="off",
     ),
     similarity_threshold: float = typer.Option(
         0.85,
@@ -172,17 +187,20 @@ def main(
         False,
         "--note-force",
         help="Force note creation even if a similar note exists",
+        show_default="off",
     ),
     force: bool = typer.Option(
         False,
         "-f",
         "--force",
         help="Force re-conversion even if output already exists",
+        show_default="off",
     ),
     download_models: bool = typer.Option(
         False,
         "--download-models",
         help="Download the local captioner model named by --captions (must be a preset) for offline use",
+        show_default="off",
     ),
     verbose: int = typer.Option(
         0,
@@ -196,6 +214,7 @@ def main(
         "-q",
         "--quiet",
         help="Only show warnings and errors",
+        show_default="off",
     ),
 ) -> None:
     """Convert documents, audio, and video to markdown.
