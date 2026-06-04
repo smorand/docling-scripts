@@ -47,7 +47,7 @@ class DocxConverter(BaseConverter):
         self.write_document_md(page_md)
 
         if fig_count > 0:
-            catalog = build_images_catalog(doc, figure_map)
+            catalog = build_images_catalog(doc, figure_map, figure_descriptions)
             (self.output_dir / "images.md").write_text(catalog)
 
         if self.options.all_formats:
@@ -57,6 +57,6 @@ class DocxConverter(BaseConverter):
             logger.info("Title: %s", title)
         self.print_summary(
             fig_count=fig_count,
-            vlm_used=self.options.vlm and fig_count > 0,
+            captions_used=self.options.captions_enabled and fig_count > 0,
             desc_count=len(figure_descriptions),
         )

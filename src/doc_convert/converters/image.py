@@ -11,8 +11,19 @@ from doc_convert.base import BaseConverter
 logger = logging.getLogger(__name__)
 
 
-def convert_image_to_markdown(doc_path: Path, provider: str, model: str, settings: Settings) -> str:
-    """Convert a single image or PDF via external LLM VlmPipeline. Returns markdown."""
+def convert_image_to_markdown(
+    doc_path: Path,
+    provider: str,
+    model: str,
+    settings: Settings,
+    *,
+    prompt: str | None = None,
+) -> str:
+    """Convert a single image or PDF via external LLM VlmPipeline. Returns markdown.
+
+    Pass ``prompt`` to override the default whole-page conversion prompt
+    (e.g. for single-figure captioning).
+    """
     from docling.datamodel.base_models import InputFormat  # noqa: PLC0415
     from docling.datamodel.pipeline_options import VlmPipelineOptions  # noqa: PLC0415
     from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, ResponseFormat  # noqa: PLC0415
@@ -32,7 +43,7 @@ def convert_image_to_markdown(doc_path: Path, provider: str, model: str, setting
         url=get_provider_url(provider, settings),
         params={"model": model, "max_tokens": settings.llm_max_tokens},
         headers={"Authorization": f"Bearer {api_key}"},
-        prompt=get_external_llm_prompt(),
+        prompt=prompt or get_external_llm_prompt(),
         scale=2.0,
         timeout=settings.llm_timeout,
         response_format=ResponseFormat.MARKDOWN,
@@ -66,15 +77,17 @@ class ImageConverter(BaseConverter):
     """Image/PDF conversion via external LLM VlmPipeline."""
 
     def convert(self) -> None:
-        if not self.options.external_llm:
+        if not self.options.llm:
             import typer  # noqa: PLC0415
 
             from logging_config import console  # noqa: PLC0415
 
-            console.print("[red]Image/PDF conversion requires --use-external-llm[/red]")
+            console.print("[red]Image and PDF --engine llm conversion requires --llm <provider/model>[/red]")
             raise typer.Exit(1)
 
-        provider, model = self.options.external_llm
+        from doc_convert.providers import parse_external_llm  # noqa: PLC0415
+
+        provider, model = parse_external_llm(self.options.llm)
         md = convert_image_to_markdown(self.source, provider, model, self.options.settings)
         self.ensure_output_dir()
         self.write_document_md(md)

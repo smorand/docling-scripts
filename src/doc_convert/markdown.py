@@ -83,9 +83,14 @@ def build_page_annotated_markdown(  # noqa: PLR0912
     figure_map: dict[str, str],
     title: str = "",
     pdf_meta: dict[str, str] | None = None,
-    figure_descriptions: dict[str, str] | None = None,
+    figure_descriptions: dict[str, str] | None = None,  # noqa: ARG001 — kept for caller symmetry
 ) -> str:
-    """Build markdown with page number annotations."""
+    """Build markdown with page number annotations.
+
+    Figure descriptions are intentionally NOT inlined here; they live in
+    ``images.md`` (produced by :func:`build_images_catalog`). The parameter
+    is accepted for caller symmetry.
+    """
     lines: list[str] = []
     current_page = None
 
@@ -118,14 +123,11 @@ def build_page_annotated_markdown(  # noqa: PLR0912
             lines.append("")
         elif isinstance(item, PictureItem):
             caption = item.caption_text(doc)
-            description = (figure_descriptions or {}).get(item.self_ref, "") or get_vlm_description(item)
             fig_path = figure_map.get(item.self_ref, "")
 
             lines.append(f"[Figure: {caption}]" if caption else "[Figure]")
             if fig_path:
                 lines.append(f"![figure]({fig_path})")
-            if description:
-                lines.append(f"\n> {description}")
             lines.append("")
         else:
             text = getattr(item, "text", None)
@@ -143,9 +145,19 @@ def build_page_annotated_markdown(  # noqa: PLR0912
     return "\n".join(lines)
 
 
-def build_images_catalog(doc: object, figure_map: dict[str, str]) -> str:
-    """Build an images.md catalog."""
+def build_images_catalog(
+    doc: object,
+    figure_map: dict[str, str],
+    figure_descriptions: dict[str, str] | None = None,
+) -> str:
+    """Build an images.md catalog with detailed descriptions.
+
+    Descriptions come from the ``figure_descriptions`` map (produced by
+    ``BaseConverter.describe_figures``). For backward compatibility, falls back
+    to the Docling in-pipeline annotation when the map is missing.
+    """
     lines: list[str] = ["# Image Catalog\n"]
+    descriptions = figure_descriptions or {}
 
     for item, _ in doc.iterate_items():  # type: ignore[attr-defined]
         if not isinstance(item, PictureItem):
@@ -154,18 +166,29 @@ def build_images_catalog(doc: object, figure_map: dict[str, str]) -> str:
         if not fig_path:
             continue
 
-        description = get_vlm_description(item)
+        description = descriptions.get(item.self_ref, "") or get_vlm_description(item)
         caption = item.caption_text(doc)
         classification = get_picture_classification(item)
+        page_no = ""
+        prov = getattr(item, "prov", None)
+        if prov:
+            page_no = str(prov[0].page_no)
 
-        lines.append(f"## {Path(fig_path).name}\n")
-        lines.append(f"- **Path:** {fig_path}")
+        lines.append(f"## {Path(fig_path).name}")
+        lines.append("")
+        lines.append(f"![{Path(fig_path).stem}]({fig_path})")
+        lines.append("")
+        lines.append(f"- **Path:** `{fig_path}`")
+        if page_no:
+            lines.append(f"- **Page:** {page_no}")
         if classification:
             lines.append(f"- **Type:** {classification}")
         if caption:
             lines.append(f"- **Caption:** {caption}")
-        if description:
-            lines.append(f"- **Description:** {description}")
-        lines.append(f"\n![{Path(fig_path).stem}]({fig_path})\n")
+        lines.append("")
+        lines.append("### Description")
+        lines.append("")
+        lines.append(description.strip() if description else "_No description available._")
+        lines.append("")
 
     return "\n".join(lines)

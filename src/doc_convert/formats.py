@@ -1,12 +1,15 @@
-"""Format detection and VLM preset definitions."""
+"""Format detection, captions spec, and engine selection."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path  # noqa: TC003
 
 import typer
 from docling.datamodel.base_models import InputFormat
 
+from config import Settings  # noqa: TC001
 from logging_config import console
 
 EXT_TO_FORMAT: dict[str, InputFormat] = {
@@ -27,7 +30,7 @@ EXT_TO_FORMAT: dict[str, InputFormat] = {
 }
 
 
-def detect_format(path: Path) -> InputFormat:  # noqa: F821
+def detect_format(path: Path) -> InputFormat:
     """Detect input format from file extension."""
     ext = path.suffix.lower()
     fmt = EXT_TO_FORMAT.get(ext)
@@ -38,12 +41,15 @@ def detect_format(path: Path) -> InputFormat:  # noqa: F821
     return fmt
 
 
-class VlmPreset(str, Enum):
-    smolvlm = "smolvlm"
-    granite_vision = "granite_vision"
-    pixtral = "pixtral"
-    qwen = "qwen"
+class Engine(str, Enum):
+    """Body extraction engine for PDF / image inputs."""
 
+    LOCAL = "local"
+    LLM = "llm"
+
+
+LOCAL_PRESETS: tuple[str, ...] = ("smolvlm", "granite_vision", "pixtral", "qwen")
+DEFAULT_LOCAL_PRESET = "smolvlm"
 
 PRESET_REPO_IDS: dict[str, str] = {
     "smolvlm": "HuggingFaceTB/SmolVLM-256M-Instruct",
@@ -51,3 +57,88 @@ PRESET_REPO_IDS: dict[str, str] = {
     "pixtral": "mistral-community/pixtral-12b",
     "qwen": "Qwen/Qwen2.5-VL-3B-Instruct",
 }
+
+# Preferred cloud captioner when neither --captions nor --llm is given.
+# Tried in order; first one with credentials in env is used. Falls back to
+# the local smolvlm preset if none has credentials.
+AUTO_CAPTIONS_PREFERENCES: tuple[str, ...] = (
+    "ibm/claude-haiku-4-5",
+    "google/gemini-3.1-flash-lite-preview",
+)
+
+
+@dataclass(frozen=True)
+class CaptionsOff:
+    """No figure descriptions."""
+
+
+@dataclass(frozen=True)
+class CaptionsLocal:
+    """Local VLM captioner (offline HuggingFace model)."""
+
+    preset: str
+
+
+@dataclass(frozen=True)
+class CaptionsLlm:
+    """Remote LLM captioner (provider/model)."""
+
+    provider: str
+    model: str
+
+
+CaptionsSpec = CaptionsOff | CaptionsLocal | CaptionsLlm
+
+
+def parse_captions(value: str) -> CaptionsSpec:
+    """Parse a --captions value: 'off', a local preset, or a 'provider/model' slug."""
+    from doc_convert.providers import parse_external_llm  # noqa: PLC0415
+
+    if value == "off":
+        return CaptionsOff()
+    if "/" in value:
+        provider, model = parse_external_llm(value)
+        return CaptionsLlm(provider, model)
+    if value in LOCAL_PRESETS:
+        return CaptionsLocal(value)
+    presets = ", ".join(LOCAL_PRESETS)
+    console.print(
+        f"[red]Invalid --captions value '{value}'. Expected: off, a local preset ({presets}), "
+        f"or a 'provider/model' slug.[/red]"
+    )
+    raise typer.Exit(1)
+
+
+def resolve_captions(value: str | None, llm: str | None, settings: Settings) -> CaptionsSpec:
+    """Resolve the captions spec, applying defaults.
+
+    Precedence:
+        1. Explicit --captions value (any form).
+        2. --llm <provider/model> → captions go to that same model.
+        3. First cloud preference in AUTO_CAPTIONS_PREFERENCES with creds in env.
+           Today that means ibm/claude-haiku-4-5 if IBM ICA is configured,
+           otherwise google/gemini-3.1-flash-lite-preview if GOOGLE_API_KEY is set.
+        4. Local default preset (smolvlm).
+    """
+    from doc_convert.providers import parse_external_llm  # noqa: PLC0415
+
+    if value is not None:
+        return parse_captions(value)
+    if llm:
+        provider, model = parse_external_llm(llm)
+        return CaptionsLlm(provider, model)
+    for spec in AUTO_CAPTIONS_PREFERENCES:
+        provider, model = parse_external_llm(spec)
+        if _provider_has_credentials(provider, settings):
+            return CaptionsLlm(provider, model)
+    return CaptionsLocal(DEFAULT_LOCAL_PRESET)
+
+
+def _provider_has_credentials(provider: str, settings: Settings) -> bool:
+    if provider == "google":
+        return bool(settings.google_api_key)
+    if provider == "openrouter":
+        return bool(settings.openrouter_api_key)
+    if provider == "ibm":
+        return bool(settings.ibm_ica_model_key and settings.ibm_ica_base_url)
+    return False

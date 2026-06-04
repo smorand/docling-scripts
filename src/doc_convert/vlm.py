@@ -14,28 +14,48 @@ from logging_config import console
 logger = logging.getLogger(__name__)
 
 
-def describe_images_with_vlm(image_paths: list[Path], vlm_preset: str, models_path: Path) -> list[str]:
-    """Describe images using local VLM engine (offline, uses models_path)."""
-    from docling.datamodel.accelerator_options import AcceleratorOptions  # noqa: PLC0415
+def is_mps_float64_error(exc: BaseException) -> bool:
+    """Return True if the exception looks like the Apple Silicon MPS float64 incompatibility."""
+    msg = str(exc).lower()
+    return "mps" in msg and ("float64" in msg or "doesn't support" in msg)
+
+
+def _build_local_vlm_model(vlm_preset: str, models_path: Path, *, cpu: bool):  # type: ignore[no-untyped-def]
+    from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions  # noqa: PLC0415
     from docling.datamodel.pipeline_options import PictureDescriptionVlmEngineOptions  # noqa: PLC0415
     from docling.models.stages.picture_description.picture_description_vlm_engine_model import (  # noqa: PLC0415
         PictureDescriptionVlmEngineModel,
     )
+
+    from doc_convert.providers import get_caption_prompt  # noqa: PLC0415
+
+    options = PictureDescriptionVlmEngineOptions.from_preset(vlm_preset)
+    # Override the preset's default short caption prompt with the detailed one.
+    try:
+        options.prompt = get_caption_prompt()
+    except (AttributeError, TypeError):
+        logger.debug("Local captioner preset %s does not accept a prompt override", vlm_preset)
+    accel = AcceleratorOptions(device=AcceleratorDevice.CPU) if cpu else AcceleratorOptions()
+    return PictureDescriptionVlmEngineModel(
+        enabled=True,
+        enable_remote_services=False,
+        artifacts_path=str(models_path),
+        options=options,
+        accelerator_options=accel,
+    )
+
+
+def describe_images_with_vlm(image_paths: list[Path], vlm_preset: str, models_path: Path) -> list[str]:
+    """Describe images using local VLM engine (offline, uses models_path).
+
+    Automatically retries on CPU when an Apple Silicon MPS float64 error is detected.
+    """
     from PIL import Image  # noqa: PLC0415
 
     if not models_path.exists():
         console.print(f"[red]Models directory not found: {models_path}[/red]")
         console.print("Run [bold]doc-convert --download-models[/bold] first.")
         raise typer.Exit(1)
-
-    options = PictureDescriptionVlmEngineOptions.from_preset(vlm_preset)
-    model = PictureDescriptionVlmEngineModel(
-        enabled=True,
-        enable_remote_services=False,
-        artifacts_path=str(models_path),
-        options=options,
-        accelerator_options=AcceleratorOptions(),
-    )
 
     # Filter out unsupported image formats (WMF, EMF) that PIL cannot open on macOS
     UNSUPPORTED_EXTS = {".wmf", ".emf"}
@@ -56,7 +76,15 @@ def describe_images_with_vlm(image_paths: list[Path], vlm_preset: str, models_pa
     if not pil_images:
         return [""] * len(image_paths)
 
-    raw = list(model._annotate_images(pil_images))
+    try:
+        model = _build_local_vlm_model(vlm_preset, models_path, cpu=False)
+        raw = list(model._annotate_images(pil_images))
+    except RuntimeError as exc:
+        if not is_mps_float64_error(exc):
+            raise
+        logger.warning("MPS float64 error from local captioner; retrying on CPU")
+        model = _build_local_vlm_model(vlm_preset, models_path, cpu=True)
+        raw = list(model._annotate_images(pil_images))
     cleaned = [re.sub(r"<end_of_utteranc\w*>?", "", d).strip() for d in raw]
 
     # Rebuild full list with empty strings for skipped images
@@ -69,14 +97,16 @@ def describe_images_with_vlm(image_paths: list[Path], vlm_preset: str, models_pa
 def describe_images_with_external_llm(
     image_paths: list[Path], provider: str, model: str, settings: Settings
 ) -> list[str]:
-    """Describe images using an external LLM provider."""
+    """Describe individual figures with the dedicated caption prompt (not the whole-page one)."""
     from doc_convert.converters.image import convert_image_to_markdown  # noqa: PLC0415
+    from doc_convert.providers import get_caption_prompt  # noqa: PLC0415
 
+    prompt = get_caption_prompt()
     total = len(image_paths)
     logger.info("Describing %d image(s) with %s/%s", total, provider, model)
     descriptions: list[str] = []
     for i, img_path in enumerate(image_paths, 1):
         logger.info("Describing image %d/%d: %s", i, total, img_path.name)
-        md = convert_image_to_markdown(img_path, provider, model, settings)
+        md = convert_image_to_markdown(img_path, provider, model, settings, prompt=prompt)
         descriptions.append(md.strip())
     return descriptions

@@ -24,6 +24,26 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # ── MIME types ───────────────────────────────────────────────────────────────
 
+IMAGE_MIME: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+}
+
+
+def is_image_ext(ext: str) -> bool:
+    return ext.lower() in IMAGE_MIME
+
+
+def get_image_mime(path: Path) -> str:
+    return IMAGE_MIME.get(path.suffix.lower(), "image/png")
+
+
 AUDIO_MIME: dict[str, str] = {
     ".ogg": "audio/ogg",
     ".mp3": "audio/mp3",
@@ -137,12 +157,19 @@ def _gemini_generate(
     api_key: str,
     *,
     system_prompt: str | None = None,
+    extra_files: list[tuple[str, str]] | None = None,
 ) -> str:
-    """Generate content using an uploaded Gemini file."""
+    """Generate content using an uploaded Gemini file.
+
+    ``extra_files`` is a list of ``(file_uri, mime_type)`` tuples to attach
+    alongside the primary media (e.g. companion whiteboard images).
+    """
     parts: list[dict] = [
         {"text": prompt},
         {"file_data": {"mime_type": mime_type, "file_uri": file_uri}},
     ]
+    for uri, mime in extra_files or []:
+        parts.append({"file_data": {"mime_type": mime, "file_uri": uri}})
     body: dict = {"contents": [{"parts": parts}]}
     if system_prompt:
         body["systemInstruction"] = {"parts": [{"text": system_prompt}]}
@@ -196,27 +223,55 @@ def process_media_google(
     api_key: str,
     *,
     system_prompt: str | None = None,
+    attachments: list[Path] | None = None,
 ) -> str:
-    """Process audio/video via Google Gemini Files API: upload → poll → generate → cleanup."""
+    """Process audio/video via Google Gemini Files API: upload → poll → generate → cleanup.
+
+    ``attachments`` is an optional list of additional image files (e.g. whiteboard
+    photos referenced in the companion notes) uploaded alongside the primary
+    media and made available to the model in the same generate call.
+    """
     mime_type = get_media_mime(file_path)
-
-    with trace_span("gemini.upload", file=file_path.name, mime=mime_type):
-        logger.info("Uploading %s to Gemini (%s)", file_path.name, mime_type)
-        file_info = _gemini_upload(file_path, mime_type, api_key)
-        file_uri = file_info["uri"]
-        file_name = file_info["name"]
-
-    if file_info.get("state") != "ACTIVE":
-        with trace_span("gemini.poll", file=file_name):
-            logger.info("Waiting for Gemini to process %s...", file_path.name)
-            _gemini_poll(file_name, api_key)
+    uploaded_names: list[str] = []
+    extra_file_data: list[tuple[str, str]] = []
 
     try:
-        with trace_span("gemini.generate", model=model):
-            logger.info("Generating with %s", model)
-            return _gemini_generate(file_uri, mime_type, model, prompt, api_key, system_prompt=system_prompt)
+        with trace_span("gemini.upload", file=file_path.name, mime=mime_type):
+            logger.info("Uploading %s to Gemini (%s)", file_path.name, mime_type)
+            file_info = _gemini_upload(file_path, mime_type, api_key)
+            file_uri = file_info["uri"]
+            file_name = file_info["name"]
+            uploaded_names.append(file_name)
+
+        if file_info.get("state") != "ACTIVE":
+            with trace_span("gemini.poll", file=file_name):
+                logger.info("Waiting for Gemini to process %s...", file_path.name)
+                _gemini_poll(file_name, api_key)
+
+        for att in attachments or []:
+            att_mime = get_image_mime(att) if is_image_ext(att.suffix) else get_media_mime(att)
+            with trace_span("gemini.upload", file=att.name, mime=att_mime):
+                logger.info("Uploading attachment %s (%s)", att.name, att_mime)
+                att_info = _gemini_upload(att, att_mime, api_key)
+                uploaded_names.append(att_info["name"])
+                if att_info.get("state") != "ACTIVE":
+                    _gemini_poll(att_info["name"], api_key)
+                extra_file_data.append((att_info["uri"], att_mime))
+
+        with trace_span("gemini.generate", model=model, attachments=len(extra_file_data)):
+            logger.info("Generating with %s (+%d attachment(s))", model, len(extra_file_data))
+            return _gemini_generate(
+                file_uri,
+                mime_type,
+                model,
+                prompt,
+                api_key,
+                system_prompt=system_prompt,
+                extra_files=extra_file_data,
+            )
     finally:
-        _gemini_delete(file_name, api_key)
+        for name in uploaded_names:
+            _gemini_delete(name, api_key)
 
 
 # ── OpenRouter API ───────────────────────────────────────────────────────────
@@ -231,10 +286,13 @@ def process_media_openrouter(
     system_prompt: str | None = None,
     url: str = OPENROUTER_API_URL,
     provider_label: str = "openrouter",
+    attachments: list[Path] | None = None,
 ) -> str:
     """Process audio/video via an OpenAI-compatible endpoint with base64 inline.
 
     Used by OpenRouter and IBM ICA (and any other chat-completions provider).
+    ``attachments`` (optional image files) are sent inline as additional
+    ``image_url`` content parts.
     """
     mime_type = get_media_mime(file_path)
     b64_data = base64.b64encode(file_path.read_bytes()).decode()
@@ -255,18 +313,27 @@ def process_media_openrouter(
             "video_url": {"url": f"data:{mime_type};base64,{b64_data}"},
         }
 
+    content_parts: list[dict] = [
+        {"type": "text", "text": prompt},
+        media_part,
+    ]
+    for att in attachments or []:
+        if not is_image_ext(att.suffix):
+            logger.warning("Skipping non-image attachment for inline provider: %s", att.name)
+            continue
+        att_mime = get_image_mime(att)
+        att_b64 = base64.b64encode(att.read_bytes()).decode()
+        content_parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{att_mime};base64,{att_b64}"},
+            }
+        )
+
     messages: list[dict] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
-    messages.append(
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                media_part,
-            ],
-        }
-    )
+    messages.append({"role": "user", "content": content_parts})
 
     with trace_span(f"{provider_label}.generate", model=model, media_type="audio" if is_audio else "video"):
         logger.info("Sending %s to %s (%s, %s)", file_path.name, provider_label, model, mime_type)
@@ -292,7 +359,7 @@ def process_media_openrouter(
                         f"File too large for {provider_label} ({size_mb:.0f} MB as base64 payload).\n"
                         "Inline media providers have payload size limits.\n\n"
                         "Use the google/ provider instead (uploads via Files API, no size limit):\n"
-                        f"  doc-convert {file_path.name} --use-external-llm google/gemini-3.1-pro-preview\n"
+                        f"  doc-convert {file_path.name} --llm google/gemini-3.1-pro-preview\n"
                         "  (requires GOOGLE_API_KEY env var)"
                     )
                     raise RuntimeError(msg)
@@ -315,22 +382,37 @@ def process_media(
     *,
     system_prompt: str | None = None,
     url: str | None = None,
+    attachments: list[Path] | None = None,
 ) -> str:
     """Process audio/video with the specified provider.
 
-    `url` is required for `ibm` (and any other OpenAI-compatible provider with
-    a non-default endpoint); ignored for `google`.
+    ``url`` is required for ``ibm`` (and any other OpenAI-compatible provider
+    with a non-default endpoint); ignored for ``google``.
+
+    ``attachments`` is an optional list of extra image files (e.g. whiteboard
+    photos) to send alongside the primary media in the multimodal call.
     """
     if provider == "google":
-        return process_media_google(file_path, model, prompt, api_key, system_prompt=system_prompt)
+        return process_media_google(
+            file_path, model, prompt, api_key, system_prompt=system_prompt, attachments=attachments
+        )
     if provider == "openrouter":
-        return process_media_openrouter(file_path, model, prompt, api_key, system_prompt=system_prompt)
+        return process_media_openrouter(
+            file_path, model, prompt, api_key, system_prompt=system_prompt, attachments=attachments
+        )
     if provider == "ibm":
         if not url:
             msg = "ibm provider requires `url` (resolve via providers.get_provider_url)"
             raise ValueError(msg)
         return process_media_openrouter(
-            file_path, model, prompt, api_key, system_prompt=system_prompt, url=url, provider_label="ibm"
+            file_path,
+            model,
+            prompt,
+            api_key,
+            system_prompt=system_prompt,
+            url=url,
+            provider_label="ibm",
+            attachments=attachments,
         )
     msg = f"Unsupported provider for media: {provider}"
     raise ValueError(msg)

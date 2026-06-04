@@ -114,7 +114,7 @@ def _load_text_file(path: Path) -> str | None:
 def _convert_document(ref_path: Path, output_dir: Path, settings: Settings) -> str | None:
     """Convert a document file using doc-convert's own converters. Returns the document.md content."""
     from doc_convert.base import ConvertOptions  # noqa: PLC0415
-    from doc_convert.formats import detect_format  # noqa: PLC0415
+    from doc_convert.formats import CaptionsOff, detect_format  # noqa: PLC0415
 
     try:
         fmt = detect_format(ref_path)
@@ -124,7 +124,7 @@ def _convert_document(ref_path: Path, output_dir: Path, settings: Settings) -> s
     from docling.datamodel.base_models import InputFormat  # noqa: PLC0415
 
     ref_output = output_dir / f"_ref_{ref_path.stem}"
-    options = ConvertOptions(output_dir=ref_output, figures=False, vlm=False, settings=settings)
+    options = ConvertOptions(output_dir=ref_output, figures=False, captions=CaptionsOff(), settings=settings)
 
     try:
         if fmt == InputFormat.PDF:
@@ -311,7 +311,7 @@ def _read_cached_companion(cache_path: Path) -> tuple[str | None, str]:
 def load_companion_context(
     source_path: Path,
     output_dir: Path,
-    use_external_llm: str | None,
+    llm: str | None,
     settings: Settings,
     *,
     force: bool = False,
@@ -326,7 +326,7 @@ def load_companion_context(
     Args:
         source_path: The file being converted
         output_dir: The _docling/ output directory
-        use_external_llm: Provider/model override
+        llm: Provider/model override
         settings: Application settings
         force: Force re-analysis even if cached
         name_override: For --start-audio, the name to search for (e.g. "Meeting Name")
@@ -353,10 +353,10 @@ def load_companion_context(
         output_dir.mkdir(parents=True, exist_ok=True)
         bundle = build_companion_bundle(companion_path, output_dir, settings)
 
-        # Analyze with lightweight LLM
-        from doc_convert.providers import resolve_media_llm  # noqa: PLC0415
+        # Analyze with the document-analysis LLM (text-only, same default as --analyze)
+        from doc_convert.providers import resolve_document_analysis_llm  # noqa: PLC0415
 
-        provider, model, api_key = resolve_media_llm(use_external_llm, settings)
+        provider, model, api_key = resolve_document_analysis_llm(llm, settings)
         context = analyze_companion(bundle, provider, model, api_key, settings, lang=lang)
 
         # Cache result with language sentinel

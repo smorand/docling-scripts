@@ -12,79 +12,159 @@ cd docling-scripts
 make install    # Installs doc-convert as isolated uv tool in ~/.local/bin/
 ```
 
-## Model Setup (offline, for document VLM)
+## Model Setup (offline, local captioner)
 
 ```bash
-doc-convert --download-models                           # download smolvlm (default)
-doc-convert --download-models --vlm-preset granite_vision  # specific preset
+doc-convert --download-models                          # download smolvlm (default)
+doc-convert --download-models --captions qwen          # specific preset
 ```
 
 Models are stored in `~/.cache/models/` (override with `MODELS_PATH` env var).
+Local captioner presets: `smolvlm`, `granite_vision`, `pixtral`, `qwen`.
 
 ## Usage
 
-All conversions output to a `<name>_docling/` directory with `document.md` as the main file.
+All conversions write to a `<name>_docling/` directory with `document.md` as the main file.
+
+### The three flags that matter
+
+- `--llm <provider/model>` — remote model identity. Used for captions, document analysis, PDF/image `--engine llm`, and as fallback for media when `--media-llm` is not given.
+- `--media-llm <provider/model>` — overrides the LLM used for audio/video conversion and media analysis only. Precedence: `--media-llm` > `--llm` > `google/gemini-3.1-pro-preview` (default uses Gemini Files API; required for big recordings since `ibm/` and `openrouter/` send inline base64 and fail on large media).
+- `--captions <value>` — figure captioner. Value is `off`, a local preset (`smolvlm`, `granite_vision`, `pixtral`, `qwen`), or a `provider/model` slug. Defaults: same as `--llm` if set, else `ibm/claude-haiku-4-5` if `IBM_ICA_MODEL_KEY` + `IBM_ICA_BASE_URL` are configured, else `google/gemini-3.1-flash-lite-preview` if `GOOGLE_API_KEY` is in env, else local `smolvlm`.
+- `--engine local|llm` — PDF/image body extraction. `local` (default) uses Docling layout + OCR + tables. `llm` rasterizes each page and sends it to `--llm` (whole document is described by the model). Images always use `llm`.
+
+### PDF
 
 ```bash
-# PDF: full local extraction (figures, tables, OCR, page annotations)
+# Default: local pipeline, local smolvlm captions
 doc-convert document.pdf
-doc-convert document.pdf --no-vlm --no-figures          # text + tables only, faster
-doc-convert document.pdf --all                          # + html, json, txt exports
 
-# PDF via external LLM (quick markdown, no figure extraction)
-doc-convert document.pdf --use-external-llm google/gemini-2.5-flash
+# Local pipeline + heavier local captioner
+doc-convert document.pdf --captions qwen
 
-# DOCX: native text + image extraction with VLM descriptions
-doc-convert document.docx
-doc-convert document.docx --no-figures                  # text only
+# Hybrid: local text + tables + external figure captions (the new headline mode)
+doc-convert document.pdf --llm openrouter/anthropic/claude-haiku-4.5
+doc-convert document.pdf --captions google/gemini-3.1-pro-preview
 
-# PPTX: native text + image extraction with VLM descriptions
-doc-convert slides.pptx
+# Full-page rasterization through an external LLM
+doc-convert document.pdf --llm google/gemini-3.1-pro-preview --engine llm
 
-# XLSX
-doc-convert spreadsheet.xlsx
+# Different models for body vs figure captions
+doc-convert document.pdf --llm google/gemini-3.1-pro-preview \
+                         --captions openrouter/anthropic/claude-haiku-4.5
 
-# Audio: transcription (requires external LLM, auto: google/gemini-3.1-pro-preview)
-doc-convert meeting.ogg                                 # → meeting_docling/document.md
-doc-convert meeting.ogg --analyze                       # + analysis.md
-doc-convert meeting.ogg --analyze -i "Focus on action items only"
+# Text + tables only, no figures
+doc-convert document.pdf --no-figures
 
-# Live recording from microphone
-doc-convert --start-audio "Weekly Standup"              # → Weekly Standup_docling/audio.ogg + document.md
-doc-convert --start-audio "One 2 One" --analyze         # + analysis.md
+# Local pipeline, no figure descriptions
+doc-convert document.pdf --captions off
 
-# Video: content extraction (requires external LLM)
-doc-convert video.mp4                                   # → video_docling/document.md
-doc-convert video.mp4 --analyze                         # + analysis.md
-doc-convert "https://youtube.com/watch?v=..."           # YouTube via yt-dlp
+# Disable OCR (local pipeline only)
+doc-convert document.pdf --no-ocr
 
-# Images (requires external LLM)
-doc-convert scan.png --use-external-llm google/gemini-2.5-flash
+# Apple Silicon: --cpu forces CPU from the start. If omitted, the PDF pipeline and
+# local captioner auto-fall back to CPU when an MPS float64 error is raised.
+doc-convert document.pdf --cpu
 
-# Google Docs / Sheets
-doc-convert "https://docs.google.com/document/d/DOC_ID/edit"
-
-# Cache: skip if output exists, use -f to force
-doc-convert document.pdf                                # skips if _docling/ exists
-doc-convert document.pdf -f                             # force re-conversion
-doc-convert document.pdf -o /custom/output              # override output directory
+# All output formats (md, html, json, txt)
+doc-convert document.pdf --all
 ```
 
-### Output Structure
+### DOCX / PPTX
+
+```bash
+# Native XML parse + figure captions (auto-routes to Gemini Flash Lite if GOOGLE_API_KEY is set)
+doc-convert deck.docx
+doc-convert slides.pptx
+
+# Explicit external captioner
+doc-convert deck.docx --llm openrouter/anthropic/claude-haiku-4.5
+doc-convert slides.pptx --llm ibm/gemini-3-pro-preview
+
+# Local captioner only, ignore any env auto-routing
+doc-convert deck.docx --captions qwen
+
+# Text only
+doc-convert deck.docx --no-figures
+doc-convert deck.docx --captions off
+```
+
+### XLSX
+
+```bash
+doc-convert spreadsheet.xlsx
+```
+
+### Image (always engine=llm)
+
+```bash
+doc-convert scan.png --llm google/gemini-3.1-pro-preview
+```
+
+### Audio
+
+```bash
+# Transcription (defaults to google/gemini-3.1-pro-preview via Files API)
+doc-convert meeting.ogg
+
+# Transcription + analysis
+doc-convert meeting.ogg --analyze
+doc-convert meeting.ogg --analyze -m "Steering committee" --lang fr
+doc-convert meeting.ogg --analyze -i "Focus on action items only"
+
+# Custom transcription model
+doc-convert meeting.ogg --llm openrouter/openai/gpt-4o-audio-preview
+
+# Live recording from microphone
+doc-convert --start-audio "Weekly Standup"
+doc-convert --start-audio "One 2 One" --analyze
+```
+
+### Video
+
+```bash
+doc-convert video.mp4
+doc-convert video.mp4 --analyze
+doc-convert "https://youtube.com/watch?v=..."
+```
+
+### Google Docs / Sheets / EML
+
+```bash
+doc-convert "https://docs.google.com/document/d/DOC_ID/edit"
+doc-convert email.eml --analyze
+```
+
+### Cache and output
+
+```bash
+doc-convert document.pdf                  # skips if <name>_docling/document.md exists
+doc-convert document.pdf -f               # force re-conversion
+doc-convert document.pdf -o /custom/dir   # override output directory
+```
+
+### Notes
+
+```bash
+doc-convert invoice.pdf --note            # store as a structured note
+doc-convert invoice.pdf --note --note-force
+```
+
+## Output Structure
 
 ```
 <name>_docling/
 ├── document.md    # Main file (always present)
 ├── images.md      # Image catalog (PDF, DOCX, PPTX with figures)
 ├── figures/       # Extracted images (PDF, DOCX, PPTX with figures)
-├── analysis.md    # Analysis (audio/video with --analyze)
+├── analysis.md    # Analysis (--analyze)
 ├── audio.ogg      # Recording (--start-audio only)
 └── output.*       # Additional formats (--all: md, html, json, txt)
 ```
 
-### External LLM Providers
+## External LLM Providers
 
-`--use-external-llm` supports three providers:
+`--llm` (and `--captions` when given a slug) accepts:
 
 | Provider | Format | API Key | Extra |
 |---|---|---|---|
@@ -92,11 +172,11 @@ doc-convert document.pdf -o /custom/output              # override output direct
 | OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` | |
 | IBM ICA (OpenAI-compatible) | `ibm/<model>` | `IBM_ICA_MODEL_KEY` | requires `IBM_ICA_BASE_URL` |
 
-Audio and video default to `google/gemini-3.1-pro-preview` if `--use-external-llm` is not specified. The `google/` provider uploads media via the Gemini Files API, so there is no payload size limit.
+Audio and video default to `google/gemini-3.1-pro-preview` if `--llm` is not given. The `google/` provider uploads media via the Gemini Files API, so there is no payload size limit.
 
-For IBM ICA and OpenRouter, audio/video files are sent inline (base64) via the chat completions endpoint; the Gemini Files API is not used. Large media will fail with a 502, so prefer the `google/` provider (the default) for recordings.
+For IBM ICA and OpenRouter, audio/video files are sent inline (base64) via the chat completions endpoint; the Gemini Files API is not used. Large media will fail with a 502, so prefer the `google/` provider for recordings.
 
-### System Dependencies
+## System Dependencies
 
 | Tool | Required for | Install |
 |---|---|---|
@@ -107,7 +187,7 @@ For IBM ICA and OpenRouter, audio/video files are sent inline (base64) via the c
 
 | Variable | Required for | Purpose |
 |---|---|---|
-| `MODELS_PATH` | Local VLM | Model cache directory (default: `~/.cache/models`) |
+| `MODELS_PATH` | Local captioner | Model cache directory (default: `~/.cache/models`) |
 | `GOOGLE_API_KEY` | `google/` provider | Google GenAI API key |
 | `OPENROUTER_API_KEY` | `openrouter/` provider | OpenRouter API key |
 | `IBM_ICA_MODEL_KEY` | `ibm/` provider | IBM ICA API key (OpenAI-compatible) |

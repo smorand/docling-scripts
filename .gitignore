@@ -45,3 +45,6 @@ coverage.xml
 .env.*.local
 
 # NOTE: uv.lock is committed for reproducible builds
+
+# Local agent state
+.claude/

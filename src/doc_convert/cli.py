@@ -9,8 +9,17 @@ import typer
 
 from config import Settings
 from doc_convert.base import ConvertOptions
-from doc_convert.formats import PRESET_REPO_IDS, VlmPreset
+from doc_convert.formats import (
+    DEFAULT_LOCAL_PRESET,
+    LOCAL_PRESETS,
+    PRESET_REPO_IDS,
+    Engine,
+    resolve_captions,
+)
 from doc_convert.output import resolve_output_dir
+from doc_convert.output_guard import cleanup_pending as _cleanup_outputs
+from doc_convert.output_guard import install_signal_handlers as _install_signal_handlers
+from doc_convert.output_guard import register as _register_output
 from logging_config import console, setup_logging
 from tracing import configure_tracing
 
@@ -23,8 +32,12 @@ app = typer.Typer(
 
 
 def _download_models(preset: str, settings: Settings) -> None:
-    """Download VLM model for offline use."""
+    """Download a local captioner model for offline use."""
     from docling.models.utils.hf_model_download import download_hf_model  # noqa: PLC0415
+
+    if preset not in PRESET_REPO_IDS:
+        console.print(f"[red]Unknown captions model '{preset}'. Choose one of: {', '.join(LOCAL_PRESETS)}[/red]")
+        raise typer.Exit(1)
 
     dest = Path(settings.models_path)
     dest.mkdir(parents=True, exist_ok=True)
@@ -43,7 +56,7 @@ def _download_models(preset: str, settings: Settings) -> None:
 
 
 @app.command()
-def main(  # noqa: PLR0912, PLR0915
+def main(
     document: str = typer.Argument(
         None,
         help="File path or URL. Required unless --start-audio or --download-models is used.",
@@ -54,25 +67,47 @@ def main(  # noqa: PLR0912, PLR0915
         "--output",
         help="Override output directory (default: <name>_docling/)",
     ),
-    use_external_llm: str | None = typer.Option(
+    llm: str | None = typer.Option(
         None,
-        "--use-external-llm",
-        help="External LLM provider: google/<model>, openrouter/<model>, or ibm/<model>",
+        "--llm",
+        help=(
+            "Remote LLM as 'provider/model'. Used for captions, analysis, "
+            "PDF/image --engine llm, and as the fallback for media when "
+            "--media-llm is not given. Providers: google, openrouter, ibm."
+        ),
     ),
-    vlm_preset: VlmPreset = typer.Option(
-        VlmPreset.smolvlm,
-        "--vlm-preset",
-        help="Local VLM preset for picture descriptions",
+    media_llm: str | None = typer.Option(
+        None,
+        "--media-llm",
+        help=(
+            "Override the LLM used for audio/video conversion and analysis only. "
+            "Takes precedence over --llm for media. Default: google/gemini-3.1-pro-preview "
+            "(Files API; required for large recordings — IBM/OpenRouter inline-base64 fails on big files)."
+        ),
+    ),
+    captions: str | None = typer.Option(
+        None,
+        "--captions",
+        help=(
+            "Figure captioner. One of: 'off', a local preset "
+            f"({', '.join(LOCAL_PRESETS)}), or a 'provider/model' slug. "
+            "Default: same as --llm if set, else ibm/claude-haiku-4-5 if IBM ICA "
+            "is configured, else google/gemini-3.1-flash-lite-preview if "
+            "GOOGLE_API_KEY is set, else local smolvlm."
+        ),
+    ),
+    engine: Engine = typer.Option(
+        Engine.LOCAL,
+        "--engine",
+        help=(
+            "Body extraction for PDF/image: 'local' uses Docling layout+OCR+tables; "
+            "'llm' rasterizes each page and sends it to --llm. Images always use 'llm'."
+        ),
     ),
     no_ocr: bool = typer.Option(
         False,
         "--no-ocr",
-        help="Disable OCR (PDF only)",
-    ),
-    no_vlm: bool = typer.Option(
-        False,
-        "--no-vlm",
-        help="Disable VLM picture descriptions (PDF, DOCX, PPTX)",
+        help="Disable OCR (PDF only, --engine local)",
     ),
     no_figures: bool = typer.Option(
         False,
@@ -147,7 +182,7 @@ def main(  # noqa: PLR0912, PLR0915
     download_models: bool = typer.Option(
         False,
         "--download-models",
-        help="Download the VLM model selected by --vlm-preset for offline use",
+        help="Download the local captioner model named by --captions (must be a preset) for offline use",
     ),
     verbose: int = typer.Option(
         0,
@@ -169,18 +204,83 @@ def main(  # noqa: PLR0912, PLR0915
     Use -o to override the output directory.
 
     \b
-    Documents:  doc-convert document.pdf
-    Audio:      doc-convert meeting.ogg [--analyze]
-    Video:      doc-convert video.mp4 [--analyze]
-    YouTube:    doc-convert https://youtube.com/watch?v=...
-    Record:     doc-convert --start-audio "Meeting Name"
-    Models:     doc-convert --download-models
+    Documents:        doc-convert document.pdf
+    PDF + LLM caps:   doc-convert document.pdf --llm openrouter/anthropic/claude-haiku-4.5
+    PDF rasterized:   doc-convert document.pdf --llm google/gemini-3.1-pro-preview --engine llm
+    Image:            doc-convert photo.png --llm google/gemini-3.1-pro-preview
+    Audio:            doc-convert meeting.ogg [--analyze]
+    Video:            doc-convert video.mp4 [--analyze]
+    YouTube:          doc-convert https://youtube.com/watch?v=...
+    Record:           doc-convert --start-audio "Meeting Name"
+    Models:           doc-convert --download-models [--captions qwen]
     """
     setup_logging(verbose=verbose, quiet=quiet, source_path=document)
+    _install_signal_handlers()
 
+    try:
+        _dispatch(
+            document=document,
+            output=output,
+            llm=llm,
+            media_llm=media_llm,
+            captions=captions,
+            engine=engine,
+            no_ocr=no_ocr,
+            no_figures=no_figures,
+            cpu=cpu,
+            all_formats=all_formats,
+            start_audio=start_audio,
+            analyze=analyze,
+            analysis_depth=analysis_depth,
+            meeting=meeting,
+            instructions=instructions,
+            lang=lang,
+            note=note,
+            similarity_threshold=similarity_threshold,
+            note_force=note_force,
+            force=force,
+            download_models=download_models,
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted; cleaning up incomplete outputs[/yellow]")
+        raise typer.Exit(130) from None
+    finally:
+        _cleanup_outputs()
+
+
+def _dispatch(  # noqa: PLR0912, PLR0915
+    *,
+    document: str | None,
+    output: str | None,
+    llm: str | None,
+    media_llm: str | None,
+    captions: str | None,
+    engine: Engine,
+    no_ocr: bool,
+    no_figures: bool,
+    cpu: bool,
+    all_formats: bool,
+    start_audio: bool,
+    analyze: bool,
+    analysis_depth: int,
+    meeting: str | None,
+    instructions: str | None,
+    lang: str | None,
+    note: bool,
+    similarity_threshold: float,
+    note_force: bool,
+    force: bool,
+    download_models: bool,
+) -> None:
     if download_models:
-        _download_models(vlm_preset.value, Settings())
+        preset = captions if (captions and "/" not in captions and captions != "off") else DEFAULT_LOCAL_PRESET
+        _download_models(preset, Settings())
         raise typer.Exit()
+
+    # Validate --engine llm requires --llm
+    if engine == Engine.LLM and not llm:
+        console.print("[red]--engine llm requires --llm <provider/model>[/red]")
+        raise typer.Exit(1)
 
     # ── Audio recording mode ─────────────────────────────────────────────
     if start_audio:
@@ -193,6 +293,7 @@ def main(  # noqa: PLR0912, PLR0915
         configure_tracing("doc-convert", source_path=document)
         settings = Settings()
         out_dir = resolve_output_dir(None, document, output)
+        _register_output(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         audio_file = record_audio(out_dir / "audio.ogg")
         _run_media(
@@ -204,8 +305,9 @@ def main(  # noqa: PLR0912, PLR0915
             instructions,
             lang,
             force,
-            use_external_llm,
+            llm,
             settings,
+            media_llm=media_llm,
             companion_name_override=document,
             note=note,
             note_force=note_force,
@@ -220,9 +322,7 @@ def main(  # noqa: PLR0912, PLR0915
     configure_tracing("doc-convert")
     settings = Settings()
 
-    from doc_convert.providers import parse_external_llm  # noqa: PLC0415
-
-    ext_llm = parse_external_llm(use_external_llm) if use_external_llm else None
+    captions_spec = resolve_captions(captions, llm, settings)
 
     # ── YouTube URL ──────────────────────────────────────────────────────
     from video import is_youtube_url  # noqa: PLC0415
@@ -232,6 +332,7 @@ def main(  # noqa: PLR0912, PLR0915
 
         downloaded = download_youtube(document)
         out_dir = resolve_output_dir(Path.cwd(), downloaded.stem, output)
+        _register_output(out_dir)
         try:
             _run_media(
                 downloaded,
@@ -242,8 +343,9 @@ def main(  # noqa: PLR0912, PLR0915
                 instructions,
                 lang,
                 force,
-                use_external_llm,
+                llm,
                 settings,
+                media_llm=media_llm,
                 note=note,
                 similarity_threshold=similarity_threshold,
             )
@@ -274,6 +376,7 @@ def main(  # noqa: PLR0912, PLR0915
                 from doc_convert.output import check_step_cache  # noqa: PLC0415
 
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
+                _register_output(out_dir)
                 eml_options = ConvertOptions(output_dir=out_dir, settings=settings)
                 eml_converter = EmlConverter(doc_path, eml_options)
                 if not check_step_cache(out_dir, "document.md", force):
@@ -281,7 +384,7 @@ def main(  # noqa: PLR0912, PLR0915
                 if (
                     analyze
                     and not check_step_cache(out_dir, "analysis.md", force)
-                    and eml_converter.run_analysis(use_external_llm, instructions, meeting, lang, depth=analysis_depth)
+                    and eml_converter.run_analysis(llm, instructions, meeting, lang, depth=analysis_depth)
                 ):
                     console.print("  analysis.md")
                 if note and not check_step_cache(out_dir, "note_sent", note_force):
@@ -298,6 +401,7 @@ def main(  # noqa: PLR0912, PLR0915
                 raise typer.Exit()
             if is_audio_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
+                _register_output(out_dir)
                 _run_media(
                     doc_path,
                     out_dir,
@@ -307,14 +411,16 @@ def main(  # noqa: PLR0912, PLR0915
                     instructions,
                     lang,
                     force,
-                    use_external_llm,
+                    llm,
                     settings,
+                    media_llm=media_llm,
                     note=note,
                     similarity_threshold=similarity_threshold,
                 )
                 raise typer.Exit()
             if is_video_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
+                _register_output(out_dir)
                 _run_media(
                     doc_path,
                     out_dir,
@@ -324,8 +430,9 @@ def main(  # noqa: PLR0912, PLR0915
                     instructions,
                     lang,
                     force,
-                    use_external_llm,
+                    llm,
                     settings,
+                    media_llm=media_llm,
                     note=note,
                     similarity_threshold=similarity_threshold,
                 )
@@ -339,23 +446,24 @@ def main(  # noqa: PLR0912, PLR0915
         from doc_convert.output import check_step_cache  # noqa: PLC0415
 
         out_dir = resolve_output_dir(doc_path, doc_name, output)
+        _register_output(out_dir)
 
         # ── Companion file detection ────────────────────────────────────
         from doc_convert.companion import load_companion_context  # noqa: PLC0415
 
-        companion_ctx = load_companion_context(doc_path, out_dir, use_external_llm, settings, force=force, lang=lang)
+        companion_ctx = load_companion_context(doc_path, out_dir, llm, settings, force=force, lang=lang)
         if companion_ctx:
             meeting = f"{companion_ctx}\n\n{meeting}" if meeting else companion_ctx
 
         options = ConvertOptions(
             output_dir=out_dir,
-            vlm=not no_vlm,
-            vlm_preset=vlm_preset.value,
             figures=not no_figures,
             all_formats=all_formats,
             do_ocr=not no_ocr,
             cpu=cpu,
-            external_llm=ext_llm,
+            engine=engine,
+            captions=captions_spec,
+            llm=llm,
             settings=settings,
         )
 
@@ -365,7 +473,18 @@ def main(  # noqa: PLR0912, PLR0915
 
         converter: BaseConverter | None = None
 
-        if fmt == InputFormat.PDF and not ext_llm:
+        if fmt == InputFormat.IMAGE:
+            from doc_convert.converters.image import ImageConverter  # noqa: PLC0415
+
+            if not llm:
+                console.print("[red]Image conversion requires --llm <provider/model>[/red]")
+                raise typer.Exit(1)
+            converter = ImageConverter(doc_path, options)
+        elif fmt == InputFormat.PDF and engine == Engine.LLM:
+            from doc_convert.converters.image import ImageConverter  # noqa: PLC0415
+
+            converter = ImageConverter(doc_path, options)
+        elif fmt == InputFormat.PDF:
             from doc_convert.converters.pdf import PdfConverter  # noqa: PLC0415
 
             converter = PdfConverter(doc_path, options)
@@ -381,10 +500,6 @@ def main(  # noqa: PLR0912, PLR0915
             from doc_convert.converters.xlsx import XlsxConverter  # noqa: PLC0415
 
             converter = XlsxConverter(doc_path, options)
-        elif fmt in (InputFormat.IMAGE, InputFormat.PDF):
-            from doc_convert.converters.image import ImageConverter  # noqa: PLC0415
-
-            converter = ImageConverter(doc_path, options)
         else:
             console.print(f"[red]Unsupported format: {fmt}[/red]")
             raise typer.Exit(1)
@@ -397,7 +512,7 @@ def main(  # noqa: PLR0912, PLR0915
         if (
             analyze
             and not check_step_cache(out_dir, "analysis.md", force)
-            and converter.run_analysis(use_external_llm, instructions, meeting, lang, depth=analysis_depth)
+            and converter.run_analysis(llm, instructions, meeting, lang, depth=analysis_depth)
         ):
             console.print("  analysis.md")
 
@@ -422,23 +537,31 @@ def _run_media(
     instructions: str | None,
     lang: str | None,
     force: bool,
-    use_external_llm: str | None,
+    llm: str | None,
     settings: Settings,
     *,
+    media_llm: str | None = None,
     companion_name_override: str | None = None,
     note: bool = False,
     note_force: bool = False,
     similarity_threshold: float = 0.85,
 ) -> None:
-    """Dispatch to MediaConverter with independent step caching."""
+    """Dispatch to MediaConverter with independent step caching.
+
+    ``media_llm`` (if set) overrides the model used for the actual media
+    payload (audio/video → LLM). Otherwise falls back to ``llm`` then to the
+    media default. Companion context analysis still uses ``llm`` (text path).
+    """
     from doc_convert.companion import load_companion_context  # noqa: PLC0415
     from doc_convert.converters.media import MediaConverter  # noqa: PLC0415
     from doc_convert.output import check_step_cache  # noqa: PLC0415
 
+    media_target = media_llm or llm
+
     companion_ctx = load_companion_context(
         media_path,
         output_dir,
-        use_external_llm,
+        llm,
         settings,
         force=force,
         name_override=companion_name_override,
@@ -447,7 +570,7 @@ def _run_media(
     if companion_ctx:
         meeting = f"{companion_ctx}\n\n{meeting}" if meeting else companion_ctx
 
-    options = ConvertOptions(output_dir=output_dir, settings=settings)
+    options = ConvertOptions(output_dir=output_dir, llm=media_target, settings=settings)
     converter = MediaConverter(
         media_path,
         options,
@@ -455,7 +578,7 @@ def _run_media(
         meeting=meeting,
         instructions=instructions,
         lang=lang,
-        use_external_llm=use_external_llm,
+        llm=media_target,
     )
 
     # Step 1: Conversion (skip if document.md exists)
@@ -466,7 +589,7 @@ def _run_media(
     if (
         analyze
         and not check_step_cache(output_dir, "analysis.md", force)
-        and converter.run_analysis(use_external_llm, instructions, meeting, lang)
+        and converter.run_analysis(media_target, instructions, meeting, lang)
     ):
         console.print("  analysis.md")
 

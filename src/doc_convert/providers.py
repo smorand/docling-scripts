@@ -35,6 +35,30 @@ def get_external_llm_prompt() -> str:
 # Keep module-level alias for backward compat (used by image.py)
 EXTERNAL_LLM_PROMPT = _DEFAULT_LLM_PROMPT
 
+
+_DEFAULT_CAPTION_PROMPT = (
+    "Describe this image in rich detail for an image catalog. Cover, in order:\n\n"
+    "1. **What it depicts**: subject, context, key elements, layout, colors. "
+    "Be concrete and specific.\n"
+    "2. **Image type**: photo, chart, diagram, screenshot, logo, scan, "
+    "handwritten note, etc.\n"
+    "3. **All visible text**: transcribe every readable text fragment exactly as it appears. "
+    "Use **bold** for identifiers, labels, numbers, dates, references, names, "
+    "addresses, and any administrative or technical information.\n"
+    "4. **If chart/diagram**: chart type, axes, scales, values, trends, what it shows.\n"
+    "5. **If table embedded in the image**: reproduce as a markdown table.\n\n"
+    "Output only the description in markdown, no preamble or closing remarks. "
+    "Be thorough; do not omit visible text."
+)
+
+
+def get_caption_prompt() -> str:
+    """Prompt used to describe a single extracted figure (for images.md)."""
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("document", "caption_prompt", _DEFAULT_CAPTION_PROMPT)
+
+
 # Static URLs for providers with a fixed endpoint. `ibm` is dynamic, resolved
 # at runtime from settings.ibm_ica_base_url. Use get_provider_url() to read.
 PROVIDER_URLS: dict[str, str] = {
@@ -49,6 +73,11 @@ SUPPORTED_PROVIDERS: tuple[str, ...] = ("google", "openrouter", "ibm")
 # on large audio/video recordings. gemini-3-pro-preview was retired on the Google
 # API ("no longer available"); gemini-3.1-pro-preview is its current successor.
 DEFAULT_MEDIA_LLM = "google/gemini-3.1-pro-preview"
+
+# Default model for the `--analyze` text-only analysis pass on documents.
+# Picked for reasoning quality on long markdown context. Document analysis only
+# sends text, so any provider works (no Files API constraint).
+DEFAULT_DOCUMENT_ANALYSIS_LLM = "ibm/claude-opus-4-8"
 
 
 def get_provider_url(provider: str, settings: Settings) -> str:
@@ -106,9 +135,17 @@ def require_api_key(provider: str, settings: Settings) -> str:
     raise typer.Exit(1)
 
 
-def resolve_media_llm(use_external_llm: str | None, settings: Settings) -> tuple[str, str, str]:
+def resolve_media_llm(llm: str | None, settings: Settings) -> tuple[str, str, str]:
     """Resolve provider, model, and API key for audio/video processing."""
-    llm_spec = use_external_llm or DEFAULT_MEDIA_LLM
+    llm_spec = llm or DEFAULT_MEDIA_LLM
+    provider, model = parse_external_llm(llm_spec)
+    api_key = require_api_key(provider, settings)
+    return provider, model, api_key
+
+
+def resolve_document_analysis_llm(llm: str | None, settings: Settings) -> tuple[str, str, str]:
+    """Resolve provider, model, and API key for the document `--analyze` text pass."""
+    llm_spec = llm or DEFAULT_DOCUMENT_ANALYSIS_LLM
     provider, model = parse_external_llm(llm_spec)
     api_key = require_api_key(provider, settings)
     return provider, model, api_key

@@ -9,6 +9,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from config import Settings
+from doc_convert.formats import (
+    DEFAULT_LOCAL_PRESET,
+    CaptionsLlm,
+    CaptionsLocal,
+    CaptionsOff,
+    CaptionsSpec,
+    Engine,
+)
 from doc_convert.output import print_output_summary
 
 logger = logging.getLogger(__name__)
@@ -44,18 +52,22 @@ class ConvertOptions:
     """Options passed from CLI to every converter."""
 
     output_dir: Path
-    vlm: bool = True
-    vlm_preset: str = "smolvlm"
     figures: bool = True
     all_formats: bool = False
     do_ocr: bool = True
     cpu: bool = False
-    external_llm: tuple[str, str] | None = None
+    engine: Engine = Engine.LOCAL
+    captions: CaptionsSpec = field(default_factory=lambda: CaptionsLocal(DEFAULT_LOCAL_PRESET))
+    llm: str | None = None
     settings: Settings = field(default_factory=Settings)
 
     @property
     def models_path(self) -> Path:
         return Path(self.settings.models_path)
+
+    @property
+    def captions_enabled(self) -> bool:
+        return not isinstance(self.captions, CaptionsOff)
 
 
 class BaseConverter(ABC):
@@ -145,7 +157,7 @@ class BaseConverter(ABC):
         return figure_map, image_paths, item_refs
 
     def describe_figures(self, image_paths: list[Path], item_refs: list[str], span_name: str) -> dict[str, str]:
-        """Run VLM descriptions on extracted figures. Returns {ref: description}.
+        """Run figure descriptions according to ConvertOptions.captions.
 
         Deduplicates: if the same image file is referenced by multiple items,
         it is described only once and the description is reused.
@@ -154,7 +166,7 @@ class BaseConverter(ABC):
         from tracing import trace_span  # noqa: PLC0415
 
         figure_descriptions: dict[str, str] = {}
-        if not (self.options.vlm and image_paths):
+        if not self.options.captions_enabled or not image_paths:
             return figure_descriptions
 
         # Deduplicate: describe each unique file only once
@@ -167,20 +179,19 @@ class BaseConverter(ABC):
                 seen.add(key)
 
         if len(unique_paths) < len(image_paths):
-            logger.info("VLM dedup: %d unique images from %d total", len(unique_paths), len(image_paths))
+            logger.info("Caption dedup: %d unique images from %d total", len(unique_paths), len(image_paths))
 
-        # Auto-detect: use Google Gemini 3.1 Flash Lite if API key is available
-        use_external = self.options.external_llm
-        if not use_external and self.options.settings.google_api_key:
-            use_external = ("google", "gemini-3.1-flash-lite-preview")
-            logger.info("Auto-using google/gemini-3.1-flash-lite-preview for image descriptions")
-
+        captions = self.options.captions
         with trace_span(span_name, count=len(unique_paths)):
-            if use_external:
-                provider, model = use_external
-                desc_list = describe_images_with_external_llm(unique_paths, provider, model, self.options.settings)
+            if isinstance(captions, CaptionsLlm):
+                logger.info("Captioning with %s/%s", captions.provider, captions.model)
+                desc_list = describe_images_with_external_llm(
+                    unique_paths, captions.provider, captions.model, self.options.settings
+                )
+            elif isinstance(captions, CaptionsLocal):
+                desc_list = describe_images_with_vlm(unique_paths, captions.preset, self.options.models_path)
             else:
-                desc_list = describe_images_with_vlm(unique_paths, self.options.vlm_preset, self.options.models_path)
+                return figure_descriptions
 
         # Build path -> description lookup
         path_to_desc: dict[str, str] = {}
@@ -198,7 +209,7 @@ class BaseConverter(ABC):
 
     def run_analysis(
         self,
-        use_external_llm: str | None,
+        llm: str | None,
         instructions: str | None = None,
         meeting: str | None = None,
         lang: str | None = None,
@@ -210,7 +221,7 @@ class BaseConverter(ABC):
         overridden by custom instructions via -i/--instructions.
 
         Args:
-            use_external_llm: Provider/model override (default: openrouter/google/gemini-2.5-flash)
+            llm: Provider/model override (default: ibm/claude-opus-4-8)
             instructions: Custom prompt (overrides the default analysis prompt entirely)
             meeting: Context to inject into the prompt
             lang: Output language (e.g. "fr", "en"). None = auto-detect from document.
@@ -219,7 +230,7 @@ class BaseConverter(ABC):
         """
         import httpx  # noqa: PLC0415
 
-        from doc_convert.providers import get_provider_url, resolve_media_llm  # noqa: PLC0415
+        from doc_convert.providers import get_provider_url, resolve_document_analysis_llm  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415
 
         doc_md_path = self.output_dir / "document.md"
@@ -227,7 +238,7 @@ class BaseConverter(ABC):
             return False
 
         doc_content = doc_md_path.read_text()
-        provider, model, api_key = resolve_media_llm(use_external_llm, self.options.settings)
+        provider, model, api_key = resolve_document_analysis_llm(llm, self.options.settings)
 
         source_name = self.source.name
         source_format = _ext_to_format_name(self.source.suffix)
@@ -282,7 +293,7 @@ class BaseConverter(ABC):
     def print_summary(
         self,
         fig_count: int = 0,
-        vlm_used: bool = False,
+        captions_used: bool = False,
         desc_count: int = 0,
         extra_files: list[str] | None = None,
     ) -> None:
@@ -290,7 +301,7 @@ class BaseConverter(ABC):
             self.output_dir,
             fig_count=fig_count,
             all_formats=self.options.all_formats,
-            vlm_used=vlm_used,
+            vlm_used=captions_used,
             desc_count=desc_count,
             extra_files=extra_files,
         )
