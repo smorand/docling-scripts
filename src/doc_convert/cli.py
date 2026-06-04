@@ -65,8 +65,8 @@ def main(
         None,
         "-o",
         "--output",
-        help="Override output directory. Default: <name>_docling/",
-        show_default=False,
+        help="Override output directory",
+        show_default="<name>_docling/",
     ),
     llm: str | None = typer.Option(
         None,
@@ -74,10 +74,9 @@ def main(
         help=(
             "Remote LLM as 'provider/model'. Used for captions, analysis, "
             "PDF/image --engine llm, and as the fallback for media when "
-            "--media-llm is not given. Providers: google, openrouter, ibm. "
-            "Default: unset (each step picks its own default)."
+            "--media-llm is not given. Providers: google, openrouter, ibm."
         ),
-        show_default=False,
+        show_default="unset, each step picks its own default",
     ),
     media_llm: str | None = typer.Option(
         None,
@@ -86,20 +85,22 @@ def main(
             "Override the LLM used for audio/video conversion and analysis only. "
             "Takes precedence over --llm for media. Big recordings require the "
             "Gemini Files API; IBM and OpenRouter use inline base64 and will "
-            "502 on large files. Default: google/gemini-3.1-pro-preview."
+            "502 on large files."
         ),
-        show_default=False,
+        show_default="google/gemini-3.1-pro-preview",
     ),
     captions: str | None = typer.Option(
         None,
         "--captions",
         help=(
-            f"Figure captioner. One of: 'off', a local preset ({', '.join(LOCAL_PRESETS)}), "
-            "or a 'provider/model' slug. Default: same as --llm if set, else "
-            "ibm/claude-haiku-4-5 if IBM ICA is configured, else "
-            "google/gemini-3.1-flash-lite-preview if GOOGLE_API_KEY is set, else smolvlm."
+            f"Figure captioner. One of: 'off', a local preset ({', '.join(LOCAL_PRESETS)}), or a 'provider/model' slug."
         ),
-        show_default=False,
+        show_default=(
+            "same as --llm if set, "
+            "else ibm/claude-haiku-4-5 if IBM ICA is configured, "
+            "else google/gemini-3.1-flash-lite-preview if GOOGLE_API_KEY is set, "
+            "else smolvlm"
+        ),
     ),
     engine: Engine = typer.Option(
         Engine.LOCAL,
@@ -156,21 +157,21 @@ def main(
         None,
         "-m",
         "--meeting",
-        help="Meeting name or context for audio/video prompts. Default: use the audio/video filename stem.",
-        show_default=False,
+        help="Meeting name or context for audio/video prompts",
+        show_default="audio/video filename stem",
     ),
     instructions: str | None = typer.Option(
         None,
         "-i",
         "--instructions",
-        help="Custom prompt for --analyze (overrides default analysis prompt). Default: built-in analysis prompt.",
-        show_default=False,
+        help="Custom prompt for --analyze (overrides default analysis prompt)",
+        show_default="built-in analysis prompt",
     ),
     lang: str | None = typer.Option(
         None,
         "--lang",
-        help="Output language for --analyze (e.g. fr, en). Default: auto-detect from source.",
-        show_default=False,
+        help="Output language for --analyze (e.g. fr, en)",
+        show_default="auto-detect from source",
     ),
     note: bool = typer.Option(
         False,
