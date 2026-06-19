@@ -104,20 +104,28 @@ doc-convert scan.png --llm google/gemini-3.1-pro-preview
 ### Audio
 
 ```bash
-# Transcription (defaults to google/gemini-3.1-pro-preview via Files API)
+# Transcription with speaker diarization (defaults to google/gemini-3.1-pro-preview)
 doc-convert meeting.ogg
 
-# Transcription + analysis
+# Transcription + text analysis on the consolidated document.md
 doc-convert meeting.ogg --analyze
 doc-convert meeting.ogg --analyze -m "Steering committee" --lang fr
-doc-convert meeting.ogg --analyze -i "Focus on action items only"
+doc-convert meeting.ogg --analyze --analyze-prompt "Focus on action items only"
 
-# Custom transcription model
-doc-convert meeting.ogg --llm openrouter/openai/gpt-4o-audio-preview
+# Use a different model for the analysis pass only
+doc-convert meeting.ogg --analyze --analyze-model ibm/claude-opus-4-8
+
+# Audio-only: produce an HTML meeting brief, opened in browser
+doc-convert meeting.ogg --meeting-summary
+doc-convert meeting.ogg --meeting-summary --analyze
+
+# Companion .md alongside meeting.ogg (e.g. meeting.md) → adds
+# ## Additional Context, ## Screenshots (with VLM descriptions),
+# ## Additional Documents (recursively converted) to document.md.
 
 # Live recording from microphone
 doc-convert --start-audio "Weekly Standup"
-doc-convert --start-audio "One 2 One" --analyze
+doc-convert --start-audio "One 2 One" --analyze --meeting-summary
 ```
 
 ### Video
@@ -126,13 +134,19 @@ doc-convert --start-audio "One 2 One" --analyze
 doc-convert video.mp4
 doc-convert video.mp4 --analyze
 doc-convert "https://youtube.com/watch?v=..."
+# Videos > 30 min are chunked via ffmpeg and produce an Executive Summary
+# followed by per-chunk sections.
 ```
 
-### Google Docs / Sheets / EML
+### Email (EML, MSG) and Google Docs / Sheets
 
 ```bash
 doc-convert "https://docs.google.com/document/d/DOC_ID/edit"
 doc-convert email.eml --analyze
+doc-convert outlook_message.msg --analyze
+# Attachments land under attachments/<file> with sub-folders
+# attachments/<file>_docling/ for each recursively converted item,
+# and a ## Attachments section is appended to document.md.
 ```
 
 ### Cache and output
@@ -154,12 +168,17 @@ doc-convert invoice.pdf --note --note-force
 
 ```
 <name>_docling/
-├── document.md    # Main file (always present)
-├── images.md      # Image catalog (PDF, DOCX, PPTX with figures)
-├── figures/       # Extracted images (PDF, DOCX, PPTX with figures)
-├── analysis.md    # Analysis (--analyze)
-├── audio.ogg      # Recording (--start-audio only)
-└── output.*       # Additional formats (--all: md, html, json, txt)
+├── document.md             # Main file (always present, self-contained)
+├── images.md               # Image catalog (PDF, DOCX, PPTX)
+├── figures/                # Extracted figures (PDF, DOCX, PPTX)
+├── tables/                 # Rendered tables fed to the captioner (PDF)
+├── analyze.md              # Analysis (--analyze)
+├── summary.html            # Meeting brief (--meeting-summary, audio only)
+├── attachments/            # Email PJs (binary) + <name>_docling/ sub-folders
+├── screenshots/            # Audio companion images (described in document.md)
+├── additional_documents/   # Audio companion text docs + <name>_docling/ sub-folders
+├── audio.ogg               # Recording (--start-audio only)
+└── output.*                # Additional formats (--all: md, html, json, txt)
 ```
 
 ## External LLM Providers
@@ -182,6 +201,7 @@ For IBM ICA and OpenRouter, audio/video files are sent inline (base64) via the c
 |---|---|---|
 | sox | `--start-audio` (recording) | `brew install sox` |
 | yt-dlp | YouTube URLs | `brew install yt-dlp` |
+| ffmpeg + ffprobe | Video > 30 min chunking | `brew install ffmpeg` |
 
 ## Environment Variables
 

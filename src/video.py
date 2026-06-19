@@ -155,3 +155,99 @@ def build_analysis_prompt(meeting_name: str | None = None) -> tuple[str, str | N
         prompt = f"Analyze this video. Context: {meeting_name}"
         system = f"Video context: {meeting_name}\n\n{system}"
     return prompt, system
+
+
+# ── Long-video chunking ────────────────────────────────────────────────────
+
+CHUNK_THRESHOLD_SECONDS = 30 * 60  # videos longer than this are split
+CHUNK_LENGTH_SECONDS = 30 * 60
+
+
+def video_duration_seconds(path: Path) -> float | None:
+    """Return the video duration in seconds via ``ffprobe``, or None on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return float(result.stdout.strip())
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        logger.warning("ffprobe failed for %s; treating as short video", path.name)
+        return None
+
+
+def chunk_video(path: Path, chunk_seconds: int = CHUNK_LENGTH_SECONDS) -> list[Path]:
+    """Split a video into ``chunk_seconds``-long chunks via ffmpeg stream copy.
+
+    Stream copy (-c copy) avoids re-encoding, so chunking a 2 h video takes
+    seconds. Chunks land in a temporary directory; callers are responsible for
+    cleanup (or just leave them: the OS reaps /tmp).
+    """
+    duration = video_duration_seconds(path)
+    if duration is None or duration <= chunk_seconds:
+        return [path]
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="docconvert_video_chunks_"))
+    chunk_paths: list[Path] = []
+    start = 0.0
+    index = 0
+    while start < duration:
+        chunk_path = tmp_dir / f"chunk_{index:03d}{path.suffix}"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-ss",
+                str(start),
+                "-i",
+                str(path),
+                "-t",
+                str(chunk_seconds),
+                "-c",
+                "copy",
+                str(chunk_path),
+            ],
+            check=True,
+        )
+        chunk_paths.append(chunk_path)
+        start += chunk_seconds
+        index += 1
+
+    logger.info("Split %s (%.0fs) into %d chunk(s) of %ds", path.name, duration, len(chunk_paths), chunk_seconds)
+    return chunk_paths
+
+
+def format_timestamp(seconds: float) -> str:
+    """Format seconds as HH:MM:SS for chunk headings."""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+META_SUMMARY_PROMPT = (
+    "You are given the per-chunk summaries of a long video, in chronological order. "
+    "Produce a single Executive Summary (4 to 8 sentences) that synthesizes the "
+    "whole video: main topics covered, key decisions or findings, and the overall "
+    "arc from beginning to end. Reference chunk numbers when citing specific moments "
+    "(e.g. 'in chunk 2 ...'). Output only the summary, no preamble."
+)
+
+
+def get_meta_summary_prompt() -> str:
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("video", "meta_summary_system_prompt", META_SUMMARY_PROMPT)

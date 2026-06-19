@@ -1,6 +1,6 @@
 """Document analysis prompt for --analyze on documents (PDF, DOCX, PPTX, XLSX).
 
-This prompt is used by BaseConverter.run_analysis() to produce analysis.md.
+This prompt is used by BaseConverter.run_analysis() to produce analyze.md.
 It is designed to be generic and adapt to any document type.
 
 ## How it works

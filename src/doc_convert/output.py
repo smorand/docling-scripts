@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from logging_config import console
+
+logger = logging.getLogger(__name__)
 
 
 def print_output_summary(
@@ -54,3 +57,41 @@ def check_cache(out_path: Path, force: bool) -> bool:
 def check_step_cache(out_dir: Path, filename: str, force: bool) -> bool:
     """Return True if a specific step output file exists and force is False."""
     return (out_dir / filename).exists() and not force
+
+
+_DOCLING_SUFFIX = "_docling"
+
+
+def make_document_symlink(output_dir: Path) -> None:
+    """Create ``<output_dir_stem>.md`` next to ``output_dir`` as a symlink to
+    ``<output_dir>/document.md``, so the user can open the converted document
+    without diving into the ``_docling/`` folder.
+
+    Safety:
+        - Skips if ``document.md`` is missing (conversion failed or pending).
+        - Refuses to overwrite a pre-existing regular file (e.g. a companion
+          ``.md`` next to an audio source); only existing symlinks are
+          refreshed.
+    """
+    target = output_dir / "document.md"
+    if not target.exists():
+        return
+
+    name = output_dir.name
+    stem = name[: -len(_DOCLING_SUFFIX)] if name.endswith(_DOCLING_SUFFIX) else name
+    if not stem:
+        return
+
+    link = output_dir.parent / f"{stem}.md"
+    relative_target = Path(output_dir.name) / "document.md"
+
+    if link.is_symlink():
+        link.unlink()
+    elif link.exists():
+        logger.debug("Not overwriting existing file %s with a doc symlink", link)
+        return
+
+    try:
+        link.symlink_to(relative_target)
+    except OSError as exc:
+        logger.warning("Could not create symlink %s -> %s: %s", link, relative_target, exc)

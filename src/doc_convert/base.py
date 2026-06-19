@@ -47,6 +47,20 @@ def _ext_to_format_name(ext: str) -> str:
     return _FORMAT_NAMES.get(ext.lower(), ext.upper().lstrip("."))
 
 
+def _looks_like_short_title(text: str, *, max_len: int = 200) -> bool:
+    """True when ``text`` is short enough to safely use as a top-level title.
+
+    Long ``meeting`` strings (e.g. a merged companion bundle) must not be
+    written verbatim as the analyze.md H1, otherwise the bundle leaks into
+    the analysis output.
+    """
+    if not text:
+        return False
+    if len(text) > max_len:
+        return False
+    return "\n\n" not in text
+
+
 @dataclass(frozen=True)
 class ConvertOptions:
     """Options passed from CLI to every converter."""
@@ -156,8 +170,59 @@ class BaseConverter(ABC):
             logger.info("Extracted %d figure(s)", fig_count)
         return figure_map, image_paths, item_refs
 
-    def describe_figures(self, image_paths: list[Path], item_refs: list[str], span_name: str) -> dict[str, str]:
-        """Run figure descriptions according to ConvertOptions.captions.
+    def extract_table_images(self, doc: object) -> tuple[list[Path], list[str]]:
+        """Render every TableItem as a PNG so the VLM can describe it.
+
+        Tables are saved as temporary PNGs in ``<output_dir>/tables/`` (not
+        kept in the final ``document.md`` — only the markdown serialisation is).
+        Returns (image_paths, item_refs) in document reading order.
+        """
+        import io  # noqa: PLC0415
+
+        from docling_core.types.doc.document import TableItem  # noqa: PLC0415
+
+        image_paths: list[Path] = []
+        item_refs: list[str] = []
+        tbl_count = 0
+
+        tbl_dir = self.output_dir / "tables"
+        tbl_dir.mkdir(exist_ok=True)
+        for item, _ in doc.iterate_items():  # type: ignore[attr-defined]
+            if not isinstance(item, TableItem):
+                continue
+            try:
+                img = item.get_image(doc)  # type: ignore[arg-type]
+            except Exception:
+                logger.warning("Failed to render table: %s", item.self_ref)
+                continue
+            if not img:
+                continue
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            filename = f"table_{tbl_count}.png"
+            filepath = tbl_dir / filename
+            filepath.write_bytes(buf.getvalue())
+            image_paths.append(filepath)
+            item_refs.append(item.self_ref)
+            tbl_count += 1
+
+        if tbl_count > 0:
+            logger.info("Rendered %d table image(s) for VLM description", tbl_count)
+        return image_paths, item_refs
+
+    def _describe_artifacts(
+        self,
+        image_paths: list[Path],
+        item_refs: list[str],
+        span_name: str,
+        prompt: str,
+        contexts_by_ref: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        """Shared captioning entry point for figures and tables.
+
+        ``contexts_by_ref`` maps a ref to a context block (caption + mention)
+        that the external LLM path will prepend to the prompt. The local VLM
+        path ignores it (no cheap per-image prompts).
 
         Deduplicates: if the same image file is referenced by multiple items,
         it is described only once and the description is reused.
@@ -165,18 +230,21 @@ class BaseConverter(ABC):
         from doc_convert.vlm import describe_images_with_external_llm, describe_images_with_vlm  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415
 
-        figure_descriptions: dict[str, str] = {}
+        descriptions: dict[str, str] = {}
         if not self.options.captions_enabled or not image_paths:
-            return figure_descriptions
+            return descriptions
 
-        # Deduplicate: describe each unique file only once
+        # Dedup identical files; first ref wins for context selection.
         unique_paths: list[Path] = []
-        seen: set[str] = set()
-        for p in image_paths:
-            key = str(p)
-            if key not in seen:
-                unique_paths.append(p)
-                seen.add(key)
+        unique_contexts: list[str] = []
+        seen: dict[str, int] = {}
+        for path, ref in zip(image_paths, item_refs, strict=True):
+            key = str(path)
+            if key in seen:
+                continue
+            seen[key] = len(unique_paths)
+            unique_paths.append(path)
+            unique_contexts.append((contexts_by_ref or {}).get(ref, ""))
 
         if len(unique_paths) < len(image_paths):
             logger.info("Caption dedup: %d unique images from %d total", len(unique_paths), len(image_paths))
@@ -184,28 +252,57 @@ class BaseConverter(ABC):
         captions = self.options.captions
         with trace_span(span_name, count=len(unique_paths)):
             if isinstance(captions, CaptionsLlm):
-                logger.info("Captioning with %s/%s", captions.provider, captions.model)
+                logger.info("Describing with %s/%s", captions.provider, captions.model)
                 desc_list = describe_images_with_external_llm(
-                    unique_paths, captions.provider, captions.model, self.options.settings
+                    unique_paths,
+                    captions.provider,
+                    captions.model,
+                    self.options.settings,
+                    prompt=prompt,
+                    contexts=unique_contexts,
                 )
             elif isinstance(captions, CaptionsLocal):
-                desc_list = describe_images_with_vlm(unique_paths, captions.preset, self.options.models_path)
+                desc_list = describe_images_with_vlm(
+                    unique_paths, captions.preset, self.options.models_path, prompt=prompt
+                )
             else:
-                return figure_descriptions
+                return descriptions
 
-        # Build path -> description lookup
         path_to_desc: dict[str, str] = {}
-        for p, desc in zip(unique_paths, desc_list, strict=True):
+        for path, desc in zip(unique_paths, desc_list, strict=True):
             if desc:
-                path_to_desc[str(p)] = desc
+                path_to_desc[str(path)] = desc
 
-        # Map back to item refs (including duplicates)
-        for ref, p in zip(item_refs, image_paths, strict=True):
-            desc = path_to_desc.get(str(p), "")
+        for ref, path in zip(item_refs, image_paths, strict=True):
+            desc = path_to_desc.get(str(path), "")
             if desc:
-                figure_descriptions[ref] = desc
+                descriptions[ref] = desc
 
-        return figure_descriptions
+        return descriptions
+
+    def describe_figures(
+        self,
+        image_paths: list[Path],
+        item_refs: list[str],
+        span_name: str,
+        contexts_by_ref: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        """Describe figures (PictureItems) according to ``ConvertOptions.captions``."""
+        from doc_convert.providers import get_caption_prompt  # noqa: PLC0415
+
+        return self._describe_artifacts(image_paths, item_refs, span_name, get_caption_prompt(), contexts_by_ref)
+
+    def describe_tables(
+        self,
+        image_paths: list[Path],
+        item_refs: list[str],
+        span_name: str,
+        contexts_by_ref: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        """Describe tables according to ``ConvertOptions.captions``."""
+        from doc_convert.providers import get_table_prompt  # noqa: PLC0415
+
+        return self._describe_artifacts(image_paths, item_refs, span_name, get_table_prompt(), contexts_by_ref)
 
     def run_analysis(
         self,
@@ -215,10 +312,10 @@ class BaseConverter(ABC):
         lang: str | None = None,
         depth: int = 3,
     ) -> bool:
-        """Run LLM analysis on document.md, write analysis.md.
+        """Run LLM analysis on document.md, write analyze.md.
 
         Uses the adaptive analysis prompt from analysis_prompt.py unless
-        overridden by custom instructions via -i/--instructions.
+        overridden by custom instructions via --analyze-prompt.
 
         Args:
             llm: Provider/model override (default: ibm/claude-opus-4-8)
@@ -284,10 +381,10 @@ class BaseConverter(ABC):
                 resp.raise_for_status()
 
         analysis_md = resp.json()["choices"][0]["message"]["content"]
-        if meeting:
+        if meeting and _looks_like_short_title(meeting):
             analysis_md = f"# {meeting}\n\n{analysis_md}"
-        (self.output_dir / "analysis.md").write_text(analysis_md)
-        logger.info("Analysis written to %s/analysis.md", self.output_dir)
+        (self.output_dir / "analyze.md").write_text(analysis_md)
+        logger.info("Analysis written to %s/analyze.md", self.output_dir)
         return True
 
     def print_summary(

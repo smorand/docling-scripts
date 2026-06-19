@@ -7,7 +7,14 @@ import logging
 from pathlib import Path  # noqa: TC003
 
 from doc_convert.base import BaseConverter
-from doc_convert.markdown import build_images_catalog, build_page_annotated_markdown, extract_title
+from doc_convert.markdown import (
+    FloatingArtifacts,
+    FloatingContext,
+    build_document_markdown,
+    build_images_catalog,
+    collect_floating_contexts,
+    extract_title,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,23 +128,26 @@ class PptxConverter(BaseConverter):
             logger.info("Status: %s", result.status)
 
         doc = result.document
+        contexts = collect_floating_contexts(doc)
+        context_blocks = _build_context_blocks(contexts)
+        artifacts = FloatingArtifacts()
 
-        figure_map: dict[str, str] = {}
-        figure_descriptions: dict[str, str] = {}
         fig_count = 0
-
         if self.options.figures:
             slide_images = _extract_pptx_images(self.source, self.output_dir)
             figure_map, image_paths, item_refs = _map_images_to_items(doc, slide_images)
+            artifacts.figure_paths = figure_map
             fig_count = len(image_paths)
-            figure_descriptions = self.describe_figures(image_paths, item_refs, "vlm.describe_pptx_images")
+            artifacts.figure_descriptions = self.describe_figures(
+                image_paths, item_refs, "vlm.describe_pptx_images", context_blocks
+            )
 
         title = extract_title(doc)
-        page_md = build_page_annotated_markdown(doc, figure_map, title, figure_descriptions=figure_descriptions)
+        page_md = build_document_markdown(doc, artifacts, contexts, title=title, paginated=True)
         self.write_document_md(page_md)
 
         if fig_count > 0:
-            catalog = build_images_catalog(doc, figure_map, figure_descriptions)
+            catalog = build_images_catalog(doc, artifacts, contexts)
             (self.output_dir / "images.md").write_text(catalog)
 
         if self.options.all_formats:
@@ -148,5 +158,11 @@ class PptxConverter(BaseConverter):
         self.print_summary(
             fig_count=fig_count,
             captions_used=self.options.captions_enabled and fig_count > 0,
-            desc_count=len(figure_descriptions),
+            desc_count=len(artifacts.figure_descriptions),
         )
+
+
+def _build_context_blocks(contexts: dict[str, FloatingContext]) -> dict[str, str]:
+    from doc_convert.providers import build_context_block  # noqa: PLC0415
+
+    return {ref: build_context_block(caption=ctx.caption, mention=ctx.mention) for ref, ctx in contexts.items()}

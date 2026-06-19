@@ -16,7 +16,7 @@ from doc_convert.formats import (
     Engine,
     resolve_captions,
 )
-from doc_convert.output import resolve_output_dir
+from doc_convert.output import make_document_symlink, resolve_output_dir
 from doc_convert.output_guard import cleanup_pending as _cleanup_outputs
 from doc_convert.output_guard import install_signal_handlers as _install_signal_handlers
 from doc_convert.output_guard import register as _register_output
@@ -53,6 +53,25 @@ def _download_models(preset: str, settings: Settings) -> None:
     console.print(f"Downloading [bold]{repo_id}[/bold] to {dest}/")
     download_hf_model(repo_id=repo_id, local_dir=target, progress=True)
     console.print(f"[green]Done.[/green] Model available at {target}")
+
+
+# Heavy enrichment models used by the PDF pipeline when do_chart_extraction
+# or do_formula_enrichment is enabled. We pre-fetch them into the Hugging Face
+# cache so the first conversion that needs them does not stall.
+ENRICHMENT_REPO_IDS: tuple[str, ...] = (
+    "ibm-granite/granite-vision-4.1-4b",  # chart extraction (~5 GB)
+    "docling-project/CodeFormulaV2",  # formula + code enrichment
+)
+
+
+def _download_enrichments() -> None:
+    """Pre-fetch the PDF pipeline enrichment models into the HF cache."""
+    from huggingface_hub import snapshot_download  # noqa: PLC0415
+
+    for repo_id in ENRICHMENT_REPO_IDS:
+        console.print(f"Downloading [bold]{repo_id}[/bold] into the HF cache...")
+        path = snapshot_download(repo_id=repo_id)
+        console.print(f"[green]Done.[/green] {path}")
 
 
 @app.command()
@@ -143,8 +162,29 @@ def main(
     analyze: bool = typer.Option(
         False,
         "--analyze",
-        help="Add analysis pass: analysis.md (audio: summary, video: executive brief)",
+        help="Add analysis pass: analyze.md (audio: summary, video: executive brief)",
         show_default="off",
+    ),
+    meeting_summary: bool = typer.Option(
+        False,
+        "--meeting-summary",
+        help="Audio only: generate summary.html from the transcribed document.md and open it for review.",
+        show_default="off",
+    ),
+    analyze_model: str | None = typer.Option(
+        None,
+        "--analyze-model",
+        help=(
+            "Override the LLM used for --analyze only. Takes precedence over --llm "
+            "for the analysis step (which sends text only)."
+        ),
+        show_default="ibm/claude-opus-4-8",
+    ),
+    analyze_prompt: str | None = typer.Option(
+        None,
+        "--analyze-prompt",
+        help="Custom prompt for --analyze (overrides default adaptive prompt entirely).",
+        show_default="built-in adaptive analysis prompt",
     ),
     analysis_depth: int = typer.Option(
         5,
@@ -164,8 +204,8 @@ def main(
         None,
         "-i",
         "--instructions",
-        help="Custom prompt for --analyze (overrides default analysis prompt)",
-        show_default="built-in analysis prompt",
+        help="Deprecated alias for --analyze-prompt.",
+        hidden=True,
     ),
     lang: str | None = typer.Option(
         None,
@@ -203,6 +243,16 @@ def main(
         help="Download the local captioner model named by --captions (must be a preset) for offline use",
         show_default="off",
     ),
+    download_enrichments: bool = typer.Option(
+        False,
+        "--download-enrichments",
+        help=(
+            "Pre-fetch the PDF pipeline enrichment models (Granite Vision for chart extraction "
+            "~5 GB, CodeFormulaV2 for formula enrichment) into the Hugging Face cache so the "
+            "first conversion that needs them runs offline."
+        ),
+        show_default="off",
+    ),
     verbose: int = typer.Option(
         0,
         "-v",
@@ -237,6 +287,9 @@ def main(
     setup_logging(verbose=verbose, quiet=quiet, source_path=document)
     _install_signal_handlers()
 
+    effective_prompt = analyze_prompt or instructions
+    if instructions and not analyze_prompt:
+        console.print("[yellow]--instructions is deprecated; use --analyze-prompt instead.[/yellow]")
     try:
         _dispatch(
             document=document,
@@ -251,15 +304,18 @@ def main(
             all_formats=all_formats,
             start_audio=start_audio,
             analyze=analyze,
+            meeting_summary=meeting_summary,
+            analyze_model=analyze_model,
+            analyze_prompt=effective_prompt,
             analysis_depth=analysis_depth,
             meeting=meeting,
-            instructions=instructions,
             lang=lang,
             note=note,
             similarity_threshold=similarity_threshold,
             note_force=note_force,
             force=force,
             download_models=download_models,
+            download_enrichments=download_enrichments,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted; cleaning up incomplete outputs[/yellow]")
@@ -282,24 +338,34 @@ def _dispatch(  # noqa: PLR0912, PLR0915
     all_formats: bool,
     start_audio: bool,
     analyze: bool,
+    meeting_summary: bool,
+    analyze_model: str | None,
+    analyze_prompt: str | None,
     analysis_depth: int,
     meeting: str | None,
-    instructions: str | None,
     lang: str | None,
     note: bool,
     similarity_threshold: float,
     note_force: bool,
     force: bool,
     download_models: bool,
+    download_enrichments: bool,
 ) -> None:
     if download_models:
         preset = captions if (captions and "/" not in captions and captions != "off") else DEFAULT_LOCAL_PRESET
         _download_models(preset, Settings())
+    if download_enrichments:
+        _download_enrichments()
+    if download_models or download_enrichments:
         raise typer.Exit()
 
     # Validate --engine llm requires --llm
     if engine == Engine.LLM and not llm:
         console.print("[red]--engine llm requires --llm <provider/model>[/red]")
+        raise typer.Exit(1)
+
+    if meeting_summary and not _is_audio_source(document, start_audio):
+        console.print("[red]--meeting-summary only applies to audio sources.[/red]")
         raise typer.Exit(1)
 
     # ── Audio recording mode ─────────────────────────────────────────────
@@ -316,18 +382,22 @@ def _dispatch(  # noqa: PLR0912, PLR0915
         _register_output(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         audio_file = record_audio(out_dir / "audio.ogg")
+        captions_spec = resolve_captions(captions, llm, settings)
         _run_media(
             audio_file,
             out_dir,
             "audio",
             meeting or document,
             analyze,
-            instructions,
+            analyze_prompt,
             lang,
             force,
             llm,
             settings,
+            captions_spec=captions_spec,
             media_llm=media_llm,
+            analyze_model=analyze_model,
+            meeting_summary=meeting_summary,
             companion_name_override=document,
             note=note,
             note_force=note_force,
@@ -360,12 +430,14 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                 "video",
                 meeting,
                 analyze,
-                instructions,
+                analyze_prompt,
                 lang,
                 force,
                 llm,
                 settings,
+                captions_spec=captions_spec,
                 media_llm=media_llm,
+                analyze_model=analyze_model,
                 note=note,
                 similarity_threshold=similarity_threshold,
             )
@@ -391,22 +463,31 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             from media_llm import is_audio_ext, is_video_ext  # noqa: PLC0415
 
             ext = doc_path.suffix.lower()
-            if ext == ".eml":
-                from doc_convert.converters.eml import EmlConverter  # noqa: PLC0415
+            if ext in (".eml", ".msg"):
                 from doc_convert.output import check_step_cache  # noqa: PLC0415
 
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
                 _register_output(out_dir)
-                eml_options = ConvertOptions(output_dir=out_dir, settings=settings)
-                eml_converter = EmlConverter(doc_path, eml_options)
+                eml_options = ConvertOptions(output_dir=out_dir, llm=llm, settings=settings)
+                if ext == ".msg":
+                    from doc_convert.converters.msg import MsgConverter  # noqa: PLC0415
+
+                    eml_converter = MsgConverter(doc_path, eml_options)
+                else:
+                    from doc_convert.converters.eml import EmlConverter  # noqa: PLC0415
+
+                    eml_converter = EmlConverter(doc_path, eml_options)
                 if not check_step_cache(out_dir, "document.md", force):
                     eml_converter.convert()
+                make_document_symlink(out_dir)
                 if (
                     analyze
-                    and not check_step_cache(out_dir, "analysis.md", force)
-                    and eml_converter.run_analysis(llm, instructions, meeting, lang, depth=analysis_depth)
+                    and not check_step_cache(out_dir, "analyze.md", force)
+                    and eml_converter.run_analysis(
+                        analyze_model or llm, analyze_prompt, meeting, lang, depth=analysis_depth
+                    )
                 ):
-                    console.print("  analysis.md")
+                    console.print("  analyze.md")
                 if note and not check_step_cache(out_dir, "note_sent", note_force):
                     from doc_convert.notes import create_note_from_conversion  # noqa: PLC0415
 
@@ -428,12 +509,15 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                     "audio",
                     meeting,
                     analyze,
-                    instructions,
+                    analyze_prompt,
                     lang,
                     force,
                     llm,
                     settings,
+                    captions_spec=captions_spec,
                     media_llm=media_llm,
+                    analyze_model=analyze_model,
+                    meeting_summary=meeting_summary,
                     note=note,
                     similarity_threshold=similarity_threshold,
                 )
@@ -447,12 +531,14 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                     "video",
                     meeting,
                     analyze,
-                    instructions,
+                    analyze_prompt,
                     lang,
                     force,
                     llm,
                     settings,
+                    captions_spec=captions_spec,
                     media_llm=media_llm,
+                    analyze_model=analyze_model,
                     note=note,
                     similarity_threshold=similarity_threshold,
                 )
@@ -527,14 +613,15 @@ def _dispatch(  # noqa: PLR0912, PLR0915
         # Step 1: Conversion (skip if document.md exists)
         if not check_step_cache(out_dir, "document.md", force):
             converter.convert()
+        make_document_symlink(out_dir)
 
-        # Step 2: Analysis (skip if analysis.md exists)
+        # Step 2: Analysis (skip if analyze.md exists)
         if (
             analyze
-            and not check_step_cache(out_dir, "analysis.md", force)
-            and converter.run_analysis(llm, instructions, meeting, lang, depth=analysis_depth)
+            and not check_step_cache(out_dir, "analyze.md", force)
+            and converter.run_analysis(analyze_model or llm, analyze_prompt, meeting, lang, depth=analysis_depth)
         ):
-            console.print("  analysis.md")
+            console.print("  analyze.md")
 
         # Step 3: Note (skip if note_sent exists)
         if note and not check_step_cache(out_dir, "note_sent", note_force):
@@ -548,19 +635,33 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             tmp_file.unlink()
 
 
+def _is_audio_source(document: str | None, start_audio: bool) -> bool:
+    """True when the input is (or will become) an audio file."""
+    if start_audio:
+        return True
+    if not document:
+        return False
+    from media_llm import is_audio_ext  # noqa: PLC0415
+
+    return is_audio_ext(Path(document).suffix.lower())
+
+
 def _run_media(
     media_path: Path,
     output_dir: Path,
     media_type: str,
     meeting: str | None,
     analyze: bool,
-    instructions: str | None,
+    analyze_prompt: str | None,
     lang: str | None,
     force: bool,
     llm: str | None,
     settings: Settings,
     *,
+    captions_spec: object = None,
     media_llm: str | None = None,
+    analyze_model: str | None = None,
+    meeting_summary: bool = False,
     companion_name_override: str | None = None,
     note: bool = False,
     note_force: bool = False,
@@ -590,13 +691,22 @@ def _run_media(
     if companion_ctx:
         meeting = f"{companion_ctx}\n\n{meeting}" if meeting else companion_ctx
 
-    options = ConvertOptions(output_dir=output_dir, llm=media_target, settings=settings)
+    from doc_convert.formats import CaptionsLlm, CaptionsLocal, CaptionsOff  # noqa: PLC0415
+
+    options_kwargs: dict[str, object] = {
+        "output_dir": output_dir,
+        "llm": media_target,
+        "settings": settings,
+    }
+    if isinstance(captions_spec, (CaptionsOff, CaptionsLocal, CaptionsLlm)):
+        options_kwargs["captions"] = captions_spec
+    options = ConvertOptions(**options_kwargs)  # type: ignore[arg-type]
     converter = MediaConverter(
         media_path,
         options,
         media_type=media_type,
         meeting=meeting,
-        instructions=instructions,
+        instructions=analyze_prompt,
         lang=lang,
         llm=media_target,
     )
@@ -604,14 +714,28 @@ def _run_media(
     # Step 1: Conversion (skip if document.md exists)
     if not check_step_cache(output_dir, "document.md", force):
         converter.convert()
+    make_document_symlink(output_dir)
 
-    # Step 2: Analysis (skip if analysis.md exists)
+    # Step 2: Analysis (skip if analyze.md exists)
     if (
         analyze
-        and not check_step_cache(output_dir, "analysis.md", force)
-        and converter.run_analysis(media_target, instructions, meeting, lang)
+        and not check_step_cache(output_dir, "analyze.md", force)
+        and converter.run_analysis(analyze_model or media_target, analyze_prompt, meeting, lang)
     ):
-        console.print("  analysis.md")
+        console.print("  analyze.md")
+
+    # Step 2b: Meeting summary HTML (audio only).
+    if meeting_summary and media_type == "audio" and not check_step_cache(output_dir, "summary.html", force):
+        from doc_convert.meeting_summary import generate_meeting_summary  # noqa: PLC0415
+
+        if generate_meeting_summary(
+            output_dir,
+            settings,
+            analyze_model=analyze_model,
+            meeting_context=meeting,
+            lang=lang,
+        ):
+            console.print("  summary.html")
 
     # Step 3: Note (skip if note_sent exists)
     if note and not check_step_cache(output_dir, "note_sent", note_force):

@@ -1,134 +1,146 @@
-"""EML converter: parse email files to structured markdown."""
+"""EML converter: Docling EmailDocumentBackend for the body + recursive
+sub-conversion of attachments under ``attachments/``.
+"""
 
 from __future__ import annotations
 
-import email
-import email.policy
 import logging
 import re
+from typing import TYPE_CHECKING
+
+import mailparser
 
 from doc_convert.base import BaseConverter
 from doc_convert.output import print_output_summary
+from doc_convert.recursive import build_attachments_section, convert_children
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-def _html_to_text(html: str) -> str:
-    """Simple HTML to markdown conversion (no external dependency)."""
-    text = html
-    # Remove style/script blocks
-    text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    # Convert common tags
-    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"<p[^>]*>", "\n\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"</p>", "", text, flags=re.IGNORECASE)
-    text = re.sub(
-        r"<h([1-6])[^>]*>(.*?)</h\1>",
-        lambda m: f"\n{'#' * int(m.group(1))} {m.group(2)}\n",
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    text = re.sub(r"<li[^>]*>", "\n- ", text, flags=re.IGNORECASE)
-    text = re.sub(r"<a[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", r"[\2](\1)", text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<b[^>]*>(.*?)</b>", r"**\1**", text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<strong[^>]*>(.*?)</strong>", r"**\1**", text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<em[^>]*>(.*?)</em>", r"*\1*", text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<i[^>]*>(.*?)</i>", r"*\1*", text, flags=re.IGNORECASE | re.DOTALL)
-    # Remove remaining tags
-    text = re.sub(r"<[^>]+>", "", text)
-    # Decode entities
-    text = (
-        text.replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", '"')
-    )
-    # Clean up whitespace
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+def _format_addresses(addresses: list[tuple[str, str]] | None) -> str:
+    if not addresses:
+        return ""
+    formatted: list[str] = []
+    for name, email in addresses:
+        formatted.append(f"{name} <{email}>" if name else email)
+    return ", ".join(formatted)
 
 
-def _extract_body_and_attachments(msg: object) -> tuple[str, str, list[tuple[str, bytes]]]:
-    """Extract text body, HTML body, and attachments from an email message."""
-    body_text = ""
-    body_html = ""
-    attachments: list[tuple[str, bytes]] = []
+def _email_to_markdown_body(mail: mailparser.MailParser) -> str:
+    """Return a markdown rendering of the email body.
 
-    if msg.is_multipart():  # type: ignore[attr-defined]
-        for part in msg.walk():  # type: ignore[attr-defined]
-            content_type = part.get_content_type()
-            disposition = str(part.get("Content-Disposition", ""))
+    Uses Docling's HTMLDocumentBackend when an HTML part exists (proper handling
+    of tables, lists, images), falls back to the plain-text body otherwise.
+    """
+    if mail.text_html:
+        from io import BytesIO  # noqa: PLC0415
 
-            if "attachment" in disposition:
-                filename = part.get_filename() or f"attachment_{len(attachments)}"
-                payload = part.get_payload(decode=True)
-                if payload:
-                    attachments.append((filename, payload))
-            elif content_type == "text/plain" and not body_text:
-                payload = part.get_payload(decode=True)
-                if payload:
-                    body_text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-            elif content_type == "text/html" and not body_html:
-                payload = part.get_payload(decode=True)
-                if payload:
-                    body_html = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-    else:
-        content_type = msg.get_content_type()  # type: ignore[attr-defined]
-        payload = msg.get_payload(decode=True)  # type: ignore[attr-defined]
-        if payload:
-            charset = msg.get_content_charset() or "utf-8"  # type: ignore[attr-defined]
-            if content_type == "text/html":
-                body_html = payload.decode(charset, errors="replace")
+        from docling.backend.html_backend import HTMLDocumentBackend  # noqa: PLC0415
+        from docling.datamodel.base_models import InputFormat  # noqa: PLC0415
+        from docling.datamodel.document import InputDocument  # noqa: PLC0415
+
+        html = "\n".join(mail.text_html)
+        stream = BytesIO(html.encode("utf-8"))
+        in_doc = InputDocument(
+            path_or_stream=stream,
+            format=InputFormat.HTML,
+            filename="email-body.html",
+            backend=HTMLDocumentBackend,
+        )
+        backend = HTMLDocumentBackend(in_doc=in_doc, path_or_stream=stream)
+        doc = backend.convert()
+        return doc.export_to_markdown().strip()
+    if mail.text_plain:
+        return "\n\n".join(p.strip() for p in mail.text_plain if p.strip())
+    return ""
+
+
+_UNSAFE_FILENAME_CHARS = re.compile(r"[\x00-\x1f/\\]")
+
+
+def _sanitize_filename(raw: str, fallback: str) -> str:
+    """Strip path separators and control chars (incl. null bytes from MSG headers)."""
+    cleaned = _UNSAFE_FILENAME_CHARS.sub("", raw or "").strip(" .")
+    return cleaned or fallback
+
+
+def _extract_attachments(mail: mailparser.MailParser, attachments_dir: Path) -> list[Path]:
+    """Write each attachment to disk under ``attachments_dir`` and return the paths."""
+    paths: list[Path] = []
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+    for i, att in enumerate(mail.attachments):
+        filename = _sanitize_filename(att.get("filename", ""), f"attachment_{i}")
+        payload = att.get("payload", "")
+        binary = att.get("binary", False)
+        try:
+            if binary:
+                import base64  # noqa: PLC0415
+
+                data = base64.b64decode(payload)
             else:
-                body_text = payload.decode(charset, errors="replace")
-
-    return body_text, body_html, attachments
+                charset = att.get("mail_content_type_charset") or "utf-8"
+                data = payload.encode(charset, errors="replace") if isinstance(payload, str) else payload
+        except Exception as exc:
+            logger.warning("Failed to decode attachment %s: %s", filename, exc)
+            continue
+        out_path = attachments_dir / filename
+        out_path.write_bytes(data)
+        paths.append(out_path)
+    return paths
 
 
 class EmlConverter(BaseConverter):
-    """EML (email) conversion to structured markdown."""
+    """EML conversion: header table + Docling-rendered body + recursively converted attachments."""
 
     def convert(self) -> None:
         logger.info("Converting %s (EML)", self.source.name)
         self.ensure_output_dir()
 
-        raw = self.source.read_bytes()
-        msg = email.message_from_bytes(raw, policy=email.policy.default)
+        mail = mailparser.parse_from_file(str(self.source))
 
-        subject = msg.get("Subject", "(no subject)")
+        subject = mail.subject or "(no subject)"
         lines: list[str] = [f"# {subject}\n"]
         lines.append("| | |")
         lines.append("|---|---|")
-        lines.append(f"| **From** | {msg.get('From', '')} |")
-        lines.append(f"| **To** | {msg.get('To', '')} |")
-        cc = msg.get("Cc", "")
-        if cc:
+        if from_ := _format_addresses(mail.from_):
+            lines.append(f"| **From** | {from_} |")
+        if to := _format_addresses(mail.to):
+            lines.append(f"| **To** | {to} |")
+        if cc := _format_addresses(mail.cc):
             lines.append(f"| **Cc** | {cc} |")
-        lines.append(f"| **Date** | {msg.get('Date', '')} |")
+        if mail.date:
+            lines.append(f"| **Date** | {mail.date.isoformat()} |")
+        if mail.message_id:
+            lines.append(f"| **Message-ID** | {mail.message_id} |")
         lines.append("")
 
-        body_text, body_html, attachments = _extract_body_and_attachments(msg)
+        body = _email_to_markdown_body(mail)
+        if body:
+            lines.append(body)
+            lines.append("")
 
-        if body_html:
-            lines.append(_html_to_text(body_html))
-        elif body_text:
-            lines.append(body_text)
+        attachments_dir = self.output_dir / "attachments"
+        attachment_paths = _extract_attachments(mail, attachments_dir) if mail.attachments else []
 
-        if attachments:
-            fig_dir = self.output_dir / "figures"
-            fig_dir.mkdir(exist_ok=True)
-            lines.append("\n\n## Attachments\n")
-            for filename, data in attachments:
-                (fig_dir / filename).write_bytes(data)
-                lines.append(f"- [{filename}](figures/{filename})")
-                logger.info("Extracted attachment: %s", filename)
+        entries = []
+        if attachment_paths:
+            entries = convert_children(
+                attachment_paths,
+                self.options.settings,
+                llm=self.options.llm,
+            )
+            section = build_attachments_section(entries)
+            if section:
+                lines.append(section)
 
         self.write_document_md("\n".join(lines))
+
         print_output_summary(
             self.output_dir,
-            fig_count=len(attachments),
+            fig_count=len(attachment_paths),
             all_formats=self.options.all_formats,
-            extra_files=["figures/ (attachments)"] if attachments else None,
+            extra_files=["attachments/ (recursively converted)"] if attachment_paths else None,
         )

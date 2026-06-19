@@ -37,7 +37,7 @@ EXTERNAL_LLM_PROMPT = _DEFAULT_LLM_PROMPT
 
 
 _DEFAULT_CAPTION_PROMPT = (
-    "Describe this image in rich detail for an image catalog. Cover, in order:\n\n"
+    "Describe this image in rich detail for a document catalog. Cover, in order:\n\n"
     "1. **What it depicts**: subject, context, key elements, layout, colors. "
     "Be concrete and specific.\n"
     "2. **Image type**: photo, chart, diagram, screenshot, logo, scan, "
@@ -51,12 +51,133 @@ _DEFAULT_CAPTION_PROMPT = (
     "Be thorough; do not omit visible text."
 )
 
+_DEFAULT_TABLE_PROMPT = (
+    "Summarize this table for a downstream RAG/LLM consumer in 2-4 sentences.\n\n"
+    "Cover:\n"
+    "- What the table measures (subject + unit).\n"
+    "- Its dimensions (what the rows and columns represent).\n"
+    "- Key magnitudes (max, min, totals, ranges) with explicit numbers.\n"
+    "- Any obvious trend, outlier, or comparison worth flagging.\n\n"
+    "Be concrete; quote numbers verbatim. Output the summary only, no preamble."
+)
+
 
 def get_caption_prompt() -> str:
-    """Prompt used to describe a single extracted figure (for images.md)."""
+    """Prompt used to describe a single extracted figure."""
     from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
 
     return get_prompt("document", "caption_prompt", _DEFAULT_CAPTION_PROMPT)
+
+
+def get_table_prompt() -> str:
+    """Prompt used to summarize an extracted table."""
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("document", "table_prompt", _DEFAULT_TABLE_PROMPT)
+
+
+_DEFAULT_MEETING_SUMMARY_CSS = """\
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #0078d4;
+            font-size: 1.5em;
+            border-bottom: 3px solid #0078d4;
+            padding-bottom: 10px;
+        }
+        h2 {
+            font-size: 1.2em;
+            color: #106ebe;
+            margin-top: 25px;
+        }
+        ul { margin: 10px 0; }
+        li { margin: 8px 0; }
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+        th { background-color: #0078d4; color: white; padding: 12px; text-align: left; }
+        td { border: 1px solid #ddd; padding: 10px; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        strong { color: #106ebe; }
+"""
+
+
+_DEFAULT_MEETING_SUMMARY_PROMPT = """\
+You are producing an HTML meeting summary for executive review.
+
+Inputs available to you:
+- The audio transcription with speaker diarization (provided as document.md).
+- Optional meeting context (calendar event, additional documents) provided
+  in the system prompt as "Meeting Context".
+
+Output: a single complete HTML document (with <html>, <head>, <body>) that
+will be opened in a browser for human validation.
+
+# Required sections, in order
+
+1. Meeting Information (icon: 📅)
+   - Title, date, agenda (if known from context).
+
+2. Attendees (icon: 👥)
+   - Bullet list. Mark absent attendees as "<i>Name (abs)</i>".
+   - People only cited but not present MUST NOT appear here.
+
+3. Topics discussed (icon: 💬)
+   - One <h2> per topic, followed by 2-5 sentences of substance.
+   - Quote concrete facts (numbers, dates, names, technical terms).
+
+4. Decisions (icon: ✅)
+   - Bullet list of every decision closed during the meeting.
+   - If none: "<i>No decision</i>".
+
+5. Actions (icon: 🎯)
+   - HTML table with columns Label | Owner | ETA.
+   - If owner unknown: "<i>not provided</i>". Same for ETA.
+   - If none: "<i>No action</i>".
+
+# Style
+
+Use this exact CSS in <head><style>...</style></head>:
+{css}
+
+# Rules
+
+- Output a complete <!DOCTYPE html><html>...</html> document. No preamble,
+  no closing remarks.
+- Write in the same language as the transcript.
+- Be specific: prefer extracted facts over vague summaries.
+- Do not invent attendees, decisions, or actions that are not in the input.
+- If the meeting context contains attachments, list them as bullets at the
+  end of the Topics section under a sub-heading "Reference materials".
+"""
+
+
+def get_meeting_summary_prompt() -> str:
+    """System prompt used by ``--meeting-summary`` to produce the HTML."""
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    template = get_prompt("meeting_summary", "system_prompt", _DEFAULT_MEETING_SUMMARY_PROMPT)
+    css = get_prompt("meeting_summary", "css", _DEFAULT_MEETING_SUMMARY_CSS)
+    return template.format(css=css)
+
+
+def build_context_block(caption: str = "", mention: str = "") -> str:
+    """Build an optional context block to prepend to a caption/table prompt.
+
+    Both fields are optional; an empty block (no caption, no mention) returns "".
+    """
+    parts: list[str] = []
+    if caption:
+        parts.append(f"Document caption: {caption.strip()}")
+    if mention:
+        parts.append(f"Mentioned in document: {mention.strip()}")
+    if not parts:
+        return ""
+    return "Context from the source document:\n" + "\n".join(f"- {p}" for p in parts) + "\n\n"
 
 
 # Static URLs for providers with a fixed endpoint. `ibm` is dynamic, resolved

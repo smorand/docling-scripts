@@ -1,11 +1,18 @@
 """Shared markdown building for document converters.
 
-Used by PDF, DOCX, and PPTX converters.
+Used by PDF, DOCX, and PPTX converters. The main entry point is
+:func:`build_document_markdown`, which produces a self-contained ``document.md``
+with figure and table descriptions inlined right after the corresponding item.
+The companion :func:`build_images_catalog` produces a separate ``images.md``
+sidecar (full catalog, useful for image-centric RAG).
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pypdfium2
@@ -13,6 +20,9 @@ from docling_core.types.doc.document import PictureItem, TableItem
 from docling_core.types.doc.labels import DocItemLabel
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Metadata helpers ──────────────────────────────────────────────────────
 
 
 def get_document_title(doc: object, pdf_path: str) -> str:
@@ -48,8 +58,16 @@ def get_pdf_metadata(pdf_path: str) -> dict[str, str]:
     return meta
 
 
-def get_vlm_description(item: PictureItem) -> str:
-    """Extract VLM-generated description from item metadata."""
+def extract_title(doc: object) -> str:
+    """Extract title from Docling document text items."""
+    for t in doc.texts:  # type: ignore[attr-defined]
+        if t.label == DocItemLabel.TITLE:
+            return t.text  # type: ignore[no-any-return]
+    return ""
+
+
+def get_vlm_description(item: object) -> str:
+    """Extract VLM-generated description from item metadata (catalog fallback)."""
     meta = getattr(item, "meta", None)
     if meta is None:
         return ""
@@ -70,29 +88,170 @@ def get_picture_classification(item: PictureItem) -> str:
     return getattr(cls_info, "label", "") or ""
 
 
-def extract_title(doc: object) -> str:
-    """Extract title from Docling document text items."""
-    for t in doc.texts:  # type: ignore[attr-defined]
-        if t.label == DocItemLabel.TITLE:
-            return t.text  # type: ignore[no-any-return]
+# ─── Floating context discovery (caption + body mention) ────────────────────
+
+
+_FLOAT_LABEL_RE = re.compile(
+    r"\b(Figure|Fig\.?|Table|Tableau|Schéma|Schema)\s*([0-9]+(?:\.[0-9]+)?)\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class FloatingContext:
+    """Caption and (optional) body-text mention for a floating item.
+
+    ``label`` is e.g. ``"Figure 3"`` when a numbered marker is found, ``""``
+    otherwise. ``caption`` is the document's own caption text (may be empty).
+    ``mention`` is a body sentence/paragraph that references this float by
+    number (e.g. "Figure 3 shows..."). May be empty.
+    """
+
+    label: str = ""
+    caption: str = ""
+    mention: str = ""
+
+
+_LABEL_NORMALIZE: dict[str, str] = {
+    "fig": "Figure",
+    "figure": "Figure",
+    "table": "Table",
+    "tableau": "Tableau",
+    "schema": "Schéma",
+    "schéma": "Schéma",
+}
+
+
+def _extract_label(caption: str) -> str:
+    """Pull ``Figure 3`` out of ``Figure 3: Architecture diagram``."""
+    if not caption:
+        return ""
+    m = _FLOAT_LABEL_RE.search(caption)
+    if not m:
+        return ""
+    kind = m.group(1).rstrip(".").lower()
+    return f"{_LABEL_NORMALIZE.get(kind, kind.capitalize())} {m.group(2)}"
+
+
+def _shorten_sentence(text: str, max_chars: int = 280) -> str:
+    text = " ".join(text.split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rsplit(" ", 1)[0] + "…"
+
+
+def _find_mention(body_texts: list[str], number: str, kind_re: str) -> str:
+    """Find the first body text that mentions the float by number."""
+    pattern = re.compile(rf"\b{kind_re}\s*{re.escape(number)}\b", re.IGNORECASE)
+    for text in body_texts:
+        if pattern.search(text):
+            return _shorten_sentence(text)
     return ""
 
 
-def build_page_annotated_markdown(  # noqa: PLR0912
+def collect_floating_contexts(doc: object) -> dict[str, FloatingContext]:
+    """Build {self_ref: FloatingContext} for every PictureItem and TableItem.
+
+    Strategy:
+        1. First pass collects every text item in reading order.
+        2. For each floating item we read its native caption.
+        3. If the caption carries a ``Figure N``/``Table N`` marker, we scan
+           the body for a sentence that references the same marker.
+        4. Otherwise we fall back to the *previous* text item in reading
+           order as a weak mention hint.
+    """
+    body_texts: list[str] = []
+    reading_order: list[tuple[str, object]] = []
+    for item, _ in doc.iterate_items():  # type: ignore[attr-defined]
+        text = getattr(item, "text", "") or ""
+        if text and not isinstance(item, (PictureItem, TableItem)):
+            body_texts.append(text)
+        reading_order.append((getattr(item, "self_ref", ""), item))
+
+    contexts: dict[str, FloatingContext] = {}
+    for idx, (ref, item) in enumerate(reading_order):
+        if not isinstance(item, (PictureItem, TableItem)) or not ref:
+            continue
+        caption = ""
+        with contextlib.suppress(Exception):
+            caption = item.caption_text(doc)  # type: ignore[arg-type]
+        label = _extract_label(caption)
+        mention = ""
+        if label:
+            m = _FLOAT_LABEL_RE.match(label)
+            if m:
+                kind = m.group(1)
+                kind_re = "fig(?:ure|\\.)?" if kind.lower().startswith("fig") else re.escape(kind)
+                mention = _find_mention(body_texts, m.group(2), kind_re)
+        if not mention:
+            for j in range(idx - 1, -1, -1):
+                prev = reading_order[j][1]
+                prev_text = getattr(prev, "text", "") or ""
+                if prev_text and not isinstance(prev, (PictureItem, TableItem)):
+                    mention = _shorten_sentence(prev_text)
+                    break
+        contexts[ref] = FloatingContext(label=label, caption=caption, mention=mention)
+    return contexts
+
+
+# ─── Document markdown builder ─────────────────────────────────────────────
+
+
+@dataclass
+class FloatingArtifacts:
+    """Maps figure/table self_refs to their on-disk image path and description."""
+
+    figure_paths: dict[str, str] = field(default_factory=dict)
+    figure_descriptions: dict[str, str] = field(default_factory=dict)
+    table_descriptions: dict[str, str] = field(default_factory=dict)
+
+
+def _heading_for(label: str, fallback_kind: str, caption: str) -> str:
+    """Build the ``#### Figure N: caption`` heading."""
+    if label and caption:
+        caption_clean = _FLOAT_LABEL_RE.sub("", caption, count=1).lstrip(" :.-").strip()
+        return f"#### {label}: {caption_clean}" if caption_clean else f"#### {label}"
+    if label:
+        return f"#### {label}"
+    if caption:
+        return f"#### {fallback_kind}: {caption}"
+    return f"#### {fallback_kind}"
+
+
+def _format_description_block(description: str, mention: str) -> str:
+    """Format the description + mention block as a markdown blockquote."""
+    if not description and not mention:
+        return ""
+    lines: list[str] = []
+    if description:
+        body = description.strip()
+        for ln in body.splitlines():
+            lines.append(f"> {ln}" if ln else ">")
+    if mention:
+        if lines:
+            lines.append(">")
+        lines.append(f"> *Cited in document: «{mention.strip()}»*")
+    return "\n".join(lines)
+
+
+def build_document_markdown(  # noqa: PLR0912, PLR0915
     doc: object,
-    figure_map: dict[str, str],
+    artifacts: FloatingArtifacts,
+    contexts: dict[str, FloatingContext] | None = None,
+    *,
     title: str = "",
     pdf_meta: dict[str, str] | None = None,
-    figure_descriptions: dict[str, str] | None = None,  # noqa: ARG001 — kept for caller symmetry
+    paginated: bool = True,
 ) -> str:
-    """Build markdown with page number annotations.
+    """Build a self-contained ``document.md``.
 
-    Figure descriptions are intentionally NOT inlined here; they live in
-    ``images.md`` (produced by :func:`build_images_catalog`). The parameter
-    is accepted for caller symmetry.
+    Figures and tables are emitted with a heading, their VLM description
+    (when available), and a link to the on-disk artifact (figures only;
+    tables are inlined as markdown directly).
     """
+    contexts = contexts or {}
     lines: list[str] = []
-    current_page = None
+    current_page: int | None = None
 
     if title:
         lines.append(f"# {title}\n")
@@ -106,7 +265,7 @@ def build_page_annotated_markdown(  # noqa: PLR0912
 
     for item, _ in doc.iterate_items():  # type: ignore[attr-defined]
         prov = getattr(item, "prov", None)
-        if prov:
+        if paginated and prov:
             page_no = prov[0].page_no
             if page_no != current_page:
                 if current_page is not None:
@@ -114,21 +273,35 @@ def build_page_annotated_markdown(  # noqa: PLR0912
                 lines.append(f"---\n*[Page {page_no}]*\n")
                 current_page = page_no
 
+        ref = getattr(item, "self_ref", "")
         if isinstance(item, TableItem):
-            df = item.export_to_dataframe(doc)
-            lines.append(df.to_markdown(index=False))
-            caption = item.caption_text(doc)
-            if caption:
-                lines.append(f"\n*{caption}*")
+            ctx = contexts.get(ref, FloatingContext())
+            lines.append(_heading_for(ctx.label, "Table", ctx.caption))
             lines.append("")
+            try:
+                table_md = item.export_to_markdown(doc=doc).strip()  # type: ignore[arg-type]
+            except Exception:
+                logger.warning("Failed to serialise table %s", ref)
+                table_md = ""
+            if table_md:
+                lines.append(table_md)
+                lines.append("")
+            block = _format_description_block(artifacts.table_descriptions.get(ref, ""), ctx.mention)
+            if block:
+                lines.append(block)
+                lines.append("")
         elif isinstance(item, PictureItem):
-            caption = item.caption_text(doc)
-            fig_path = figure_map.get(item.self_ref, "")
-
-            lines.append(f"[Figure: {caption}]" if caption else "[Figure]")
-            if fig_path:
-                lines.append(f"![figure]({fig_path})")
+            ctx = contexts.get(ref, FloatingContext())
+            lines.append(_heading_for(ctx.label, "Figure", ctx.caption))
             lines.append("")
+            block = _format_description_block(artifacts.figure_descriptions.get(ref, ""), ctx.mention)
+            if block:
+                lines.append(block)
+                lines.append("")
+            fig_path = artifacts.figure_paths.get(ref, "")
+            if fig_path:
+                lines.append(f"*Image: [`{fig_path}`]({fig_path})*")
+                lines.append("")
         else:
             text = getattr(item, "text", None)
             if text:
@@ -145,36 +318,36 @@ def build_page_annotated_markdown(  # noqa: PLR0912
     return "\n".join(lines)
 
 
+# ─── Sidecar image catalog (images.md) ──────────────────────────────────────
+
+
 def build_images_catalog(
     doc: object,
-    figure_map: dict[str, str],
-    figure_descriptions: dict[str, str] | None = None,
+    artifacts: FloatingArtifacts,
+    contexts: dict[str, FloatingContext] | None = None,
 ) -> str:
-    """Build an images.md catalog with detailed descriptions.
-
-    Descriptions come from the ``figure_descriptions`` map (produced by
-    ``BaseConverter.describe_figures``). For backward compatibility, falls back
-    to the Docling in-pipeline annotation when the map is missing.
-    """
+    """Build the standalone ``images.md`` sidecar catalog."""
+    contexts = contexts or {}
     lines: list[str] = ["# Image Catalog\n"]
-    descriptions = figure_descriptions or {}
 
     for item, _ in doc.iterate_items():  # type: ignore[attr-defined]
         if not isinstance(item, PictureItem):
             continue
-        fig_path = figure_map.get(item.self_ref, "")
+        ref = getattr(item, "self_ref", "")
+        fig_path = artifacts.figure_paths.get(ref, "")
         if not fig_path:
             continue
 
-        description = descriptions.get(item.self_ref, "") or get_vlm_description(item)
-        caption = item.caption_text(doc)
+        ctx = contexts.get(ref, FloatingContext())
+        description = artifacts.figure_descriptions.get(ref, "") or get_vlm_description(item)
         classification = get_picture_classification(item)
         page_no = ""
         prov = getattr(item, "prov", None)
         if prov:
             page_no = str(prov[0].page_no)
 
-        lines.append(f"## {Path(fig_path).name}")
+        heading = ctx.label or Path(fig_path).stem
+        lines.append(f"## {heading}")
         lines.append("")
         lines.append(f"![{Path(fig_path).stem}]({fig_path})")
         lines.append("")
@@ -183,8 +356,10 @@ def build_images_catalog(
             lines.append(f"- **Page:** {page_no}")
         if classification:
             lines.append(f"- **Type:** {classification}")
-        if caption:
-            lines.append(f"- **Caption:** {caption}")
+        if ctx.caption:
+            lines.append(f"- **Caption:** {ctx.caption}")
+        if ctx.mention:
+            lines.append(f"- **Mention:** {ctx.mention}")
         lines.append("")
         lines.append("### Description")
         lines.append("")

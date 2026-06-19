@@ -10,7 +10,7 @@ authors = [
 ]
 
 dependencies = [
-    "docling",
+    "docling>=2.99,<3.0",
     "pypdfium2",
     "httpx>=0.28.0",
     "google-auth",
@@ -22,6 +22,7 @@ dependencies = [
     "opentelemetry-sdk>=1.29.0",
     "python-pptx>=1.0.0",
     "pyyaml>=6.0",
+    "extract-msg>=0.55.0",
 ]
 
 [dependency-groups]
@@ -111,6 +112,8 @@ module = [
     "opentelemetry.*",
     "pptx.*",
     "yaml.*",
+    "mailparser",
+    "extract_msg",
 ]
 ignore_missing_imports = true
 

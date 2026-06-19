@@ -2,15 +2,15 @@
 
 Uses Gemini Flash via Google API to generate structured note metadata
 (path, title, tags, type), then stores the note via the Notes REST API
-(Google OAuth2 auth) with the full analysis.md as content.
+(Google OAuth2 auth) with the full analyze.md as content.
 
 Attachments (source file, companion .md, referenced files, document.md)
 are uploaded via signed URLs after note creation.
 
 ## Flow
-1. Read analysis.md (or document.md) from the _docling/ output
+1. Read analyze.md (or document.md) from the _docling/ output
 2. Send content + folders + routing rules to Gemini Flash -> {path, title, tags, type}
-3. POST /api/v1/notes to store the note (content = raw analysis.md)
+3. POST /api/v1/notes to store the note (content = raw analyze.md)
 4. Upload attachments via prepare-upload -> signed URL PUT
 """
 
@@ -583,21 +583,21 @@ def create_note_from_conversion(
 ) -> bool:
     """Main entry point: read conversion output, generate metadata, store note, upload attachments.
 
-    The note content is the raw analysis.md (or document.md fallback).
+    The note content is the raw analyze.md (or document.md fallback).
     Gemini Flash generates only the metadata: path, title, tags, type.
     The note path is built deterministically from the source filename.
     Returns True if note was stored successfully.
     """
     try:
         # Read content (prefer analysis, fallback to document)
-        analysis = output_dir / "analysis.md"
+        analysis = output_dir / "analyze.md"
         document = output_dir / "document.md"
         if analysis.exists():
             content = analysis.read_text()
         elif document.exists():
             content = document.read_text()
         else:
-            logger.warning("No document.md or analysis.md found in %s", output_dir)
+            logger.warning("No document.md or analyze.md found in %s", output_dir)
             return False
 
         # Get Google OAuth2 token
@@ -610,7 +610,7 @@ def create_note_from_conversion(
         # Generate note metadata via Gemini Flash (path, title, tags, type only)
         note_data = _generate_note_metadata(content, lang, settings, api_base=api_base, token=token)
 
-        # Use analysis.md as the note content directly
+        # Use analyze.md as the note content directly
         note_data["content"] = content
 
         # Build deterministic path: folder from LLM + slug from source filename

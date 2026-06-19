@@ -82,19 +82,165 @@ class MediaConverter(BaseConverter):
 
             prompt, system = build_transcription_prompt(self.meeting)
             span_name = "audio.transcribe"
+            with trace_span(span_name, file=self.source.name, provider=provider):
+                md = process_media(self.source, provider, model, prompt, api_key, system_prompt=system, url=url)
+            md = self._assemble_audio_sections(md)
         else:
-            from video import build_extraction_prompt  # noqa: PLC0415
+            md = self._extract_video_content(provider, model, api_key, url)
 
-            prompt, system = build_extraction_prompt(self.meeting)
-            span_name = "video.extract"
-
-        with trace_span(span_name, file=self.source.name, provider=provider):
-            md = process_media(self.source, provider, model, prompt, api_key, system_prompt=system, url=url)
         title = _short_meeting_title(self.meeting)
         if title:
             md = f"# {title}\n\n{md}"
         self.write_document_md(md)
         print_output_summary(self.output_dir)
+
+    def _extract_video_content(self, provider: str, model: str, api_key: str, url: str | None) -> str:
+        """Run video extraction, chunking the source past CHUNK_THRESHOLD_SECONDS."""
+        from media_llm import process_media  # noqa: PLC0415
+        from tracing import trace_span  # noqa: PLC0415
+        from video import (  # noqa: PLC0415
+            CHUNK_THRESHOLD_SECONDS,
+            build_extraction_prompt,
+            chunk_video,
+            format_timestamp,
+            get_meta_summary_prompt,
+            video_duration_seconds,
+        )
+
+        prompt, system = build_extraction_prompt(self.meeting)
+        duration = video_duration_seconds(self.source)
+
+        if duration is None or duration <= CHUNK_THRESHOLD_SECONDS:
+            with trace_span("video.extract", file=self.source.name, provider=provider):
+                return process_media(self.source, provider, model, prompt, api_key, system_prompt=system, url=url)
+
+        chunk_paths = chunk_video(self.source)
+        chunk_summaries: list[str] = []
+        for i, chunk in enumerate(chunk_paths):
+            start_s = i * (duration / max(1, len(chunk_paths)))
+            with trace_span("video.extract.chunk", file=chunk.name, provider=provider, chunk=i + 1):
+                logger.info("Processing chunk %d/%d (~%s)", i + 1, len(chunk_paths), format_timestamp(start_s))
+                chunk_summaries.append(
+                    process_media(chunk, provider, model, prompt, api_key, system_prompt=system, url=url)
+                )
+
+        # Meta-summary: text-only call (no need to resend the video)
+        joined_chunks = "\n\n".join(
+            f"### Chunk {i + 1} (starting ~{format_timestamp(i * CHUNK_THRESHOLD_SECONDS)})\n\n{summary}"
+            for i, summary in enumerate(chunk_summaries)
+        )
+        with trace_span("video.meta_summary", file=self.source.name, provider=provider):
+            meta = self._text_completion(
+                provider,
+                model,
+                api_key,
+                get_meta_summary_prompt(),
+                f"Per-chunk summaries of the video:\n\n{joined_chunks}",
+            )
+
+        parts: list[str] = ["## Executive Summary", "", meta.strip(), ""]
+        for i, summary in enumerate(chunk_summaries):
+            start_s = i * CHUNK_THRESHOLD_SECONDS
+            end_s = min((i + 1) * CHUNK_THRESHOLD_SECONDS, duration)
+            parts.extend(
+                [
+                    f"## Chunk {i + 1}: {format_timestamp(start_s)} to {format_timestamp(end_s)}",
+                    "",
+                    summary.strip(),
+                    "",
+                ]
+            )
+        return "\n".join(parts)
+
+    def _text_completion(self, provider: str, model: str, api_key: str, system: str, user: str) -> str:
+        """Plain text-only chat completion (used for video meta-summary)."""
+        import httpx  # noqa: PLC0415
+
+        from doc_convert.providers import get_provider_url  # noqa: PLC0415
+
+        with httpx.Client(timeout=180.0) as client:
+            resp = client.post(
+                get_provider_url(provider, self.options.settings),
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                },
+            )
+            resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]  # type: ignore[no-any-return]
+
+    def _assemble_audio_sections(self, transcription_md: str) -> str:
+        """Append Additional Context, Screenshots and Additional Documents sections.
+
+        Reads the companion .md next to the audio source (when present), splits
+        its referenced files into images vs text documents, and emits structured
+        sections that make ``document.md`` self-sufficient for downstream
+        ``--analyze`` and ``--meeting-summary`` passes.
+        """
+        from doc_convert.companion import detect_companion, resolve_reference_paths  # noqa: PLC0415
+        from doc_convert.recursive import build_attachments_section, convert_children  # noqa: PLC0415
+        from media_llm import is_image_ext  # noqa: PLC0415
+
+        companion = detect_companion(self.source)
+        if companion is None:
+            return transcription_md
+
+        parts: list[str] = [transcription_md.rstrip()]
+        try:
+            companion_text = companion.read_text().strip()
+        except OSError:
+            companion_text = ""
+        if companion_text:
+            parts.extend(["", "## Additional Context", "", companion_text])
+
+        try:
+            refs = resolve_reference_paths(companion)
+        except Exception:
+            logger.warning("Failed to resolve companion references for %s", companion.name)
+            refs = []
+        image_refs = [p for p in refs if is_image_ext(p.suffix)]
+        doc_refs = [p for p in refs if not is_image_ext(p.suffix)]
+
+        if image_refs and self.options.captions_enabled:
+            screenshots_dir = self.output_dir / "screenshots"
+            screenshots_dir.mkdir(exist_ok=True)
+            local_imgs: list[Path] = []
+            local_refs: list[str] = []
+            for img in image_refs:
+                dest = screenshots_dir / img.name
+                dest.write_bytes(img.read_bytes())
+                local_imgs.append(dest)
+                local_refs.append(f"#/screenshots/{img.stem}")
+            descriptions = self.describe_figures(local_imgs, local_refs, "vlm.describe_audio_screenshots")
+            parts.extend(["", "## Screenshots", ""])
+            for path, ref in zip(local_imgs, local_refs, strict=True):
+                parts.append(f"### {path.name}")
+                parts.append("")
+                desc = descriptions.get(ref, "")
+                if desc:
+                    parts.append(desc.strip())
+                    parts.append("")
+                parts.append(f"*Image: [`screenshots/{path.name}`](screenshots/{path.name})*")
+                parts.append("")
+
+        if doc_refs:
+            ad_dir = self.output_dir / "additional_documents"
+            ad_dir.mkdir(exist_ok=True)
+            local_docs: list[Path] = []
+            for doc in doc_refs:
+                dest = ad_dir / doc.name
+                dest.write_bytes(doc.read_bytes())
+                local_docs.append(dest)
+            entries = convert_children(local_docs, self.options.settings, llm=self.llm)
+            section = build_attachments_section(entries, heading="Additional Documents")
+            if section:
+                parts.extend(["", section])
+
+        return "\n".join(parts)
 
     def run_analysis(  # type: ignore[override]
         self,
@@ -162,6 +308,6 @@ class MediaConverter(BaseConverter):
         title = _short_meeting_title(meeting_ctx)
         if title:
             analysis_md = f"# {title}\n\n{analysis_md}"
-        (self.output_dir / "analysis.md").write_text(analysis_md)
-        logger.info("Analysis written to %s/analysis.md", self.output_dir)
+        (self.output_dir / "analyze.md").write_text(analysis_md)
+        logger.info("Analysis written to %s/analyze.md", self.output_dir)
         return True
