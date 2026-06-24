@@ -49,7 +49,7 @@ def _extract_pptx_images(pptx_path: Path, output_dir: Path) -> dict[int, list[Pa
                     wmf_skipped += 1
                     return
                 blob = image.blob
-                blob_hash = hashlib.md5(blob).hexdigest()
+                blob_hash = hashlib.md5(blob, usedforsecurity=False).hexdigest()
                 if blob_hash in seen_hashes:
                     images.setdefault(slide_num, []).append(seen_hashes[blob_hash])
                     dedup_count += 1

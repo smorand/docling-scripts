@@ -8,6 +8,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import httpx
 import typer
@@ -15,6 +16,9 @@ import typer
 from config import Settings  # noqa: TC001
 from logging_config import console
 from tracing import trace_span
+
+if TYPE_CHECKING:
+    from docling.datamodel.base_models import InputFormat
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +55,9 @@ def _load_google_credentials(settings: Settings) -> str:
 
     cred_type = creds_data.get("type", "")
     if cred_type == "service_account":
-        creds = service_account.Credentials.from_service_account_file(str(creds_file), scopes=DRIVE_SCOPES)
+        creds = service_account.Credentials.from_service_account_file(str(creds_file), scopes=DRIVE_SCOPES)  # type: ignore[no-untyped-call]
     elif cred_type == "authorized_user":
-        creds = user_credentials.Credentials.from_authorized_user_file(str(creds_file), scopes=DRIVE_SCOPES)
+        creds = user_credentials.Credentials.from_authorized_user_file(str(creds_file), scopes=DRIVE_SCOPES)  # type: ignore[no-untyped-call]
     else:
         console.print(f"[red]Unsupported credential type '{cred_type}'[/red]")
         raise typer.Exit(1)
@@ -62,10 +66,10 @@ def _load_google_credentials(settings: Settings) -> str:
 
     if not creds.valid:
         creds.refresh(AuthRequest())
-    return creds.token
+    return cast("str", creds.token)
 
 
-def download_google_doc(url: str, settings: Settings) -> tuple[Path, str, InputFormat]:  # noqa: F821
+def download_google_doc(url: str, settings: Settings) -> tuple[Path, str, InputFormat]:
     """Download a Google Doc/Sheet to a temp file."""
     from docling.datamodel.base_models import InputFormat  # noqa: PLC0415
 

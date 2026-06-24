@@ -33,7 +33,7 @@ class PdfConverter(BaseConverter):
             TableStructureV2Options,
         )
         from docling.document_converter import DocumentConverter, PdfFormatOption  # noqa: PLC0415
-        from docling_core.types.doc import ImageRefMode  # noqa: PLC0415
+        from docling_core.types.doc import ImageRefMode  # type: ignore[attr-defined]  # noqa: PLC0415
 
         from doc_convert.vlm import is_mps_float64_error  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415

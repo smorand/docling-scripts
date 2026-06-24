@@ -136,14 +136,14 @@ class BaseConverter(ABC):
         for item, _ in doc.iterate_items():  # type: ignore[attr-defined]
             if isinstance(item, PictureItem):
                 try:
-                    img = item.get_image(doc)
+                    img = item.get_image(doc)  # type: ignore[arg-type]
                 except Exception:
                     logger.warning("Failed to extract image: %s", item.self_ref)
                     continue
                 if img:
                     buf = io.BytesIO()
                     img.save(buf, format="PNG")
-                    img_hash = hashlib.md5(buf.getvalue()).hexdigest()
+                    img_hash = hashlib.md5(buf.getvalue(), usedforsecurity=False).hexdigest()
 
                     if img_hash in seen_hashes:
                         existing = seen_hashes[img_hash]

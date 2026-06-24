@@ -70,7 +70,7 @@ def convert_image_to_markdown(
         result = converter.convert(str(doc_path))
         logger.info("Status: %s", result.status)
 
-    return result.document.export_to_markdown()  # type: ignore[no-any-return]
+    return result.document.export_to_markdown()
 
 
 class ImageConverter(BaseConverter):

@@ -16,15 +16,16 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path.home() / ".config" / "doc-convert" / "config.yaml"
 
-_config: dict | None = None
+_config: dict[str, Any] | None = None
 
 
-def _load_config() -> dict:
+def _load_config() -> dict[str, Any]:
     """Load config from YAML file, cached after first load."""
     global _config  # noqa: PLW0603
     if _config is not None:

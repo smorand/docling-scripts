@@ -12,6 +12,7 @@ import base64
 import logging
 import time
 from pathlib import Path  # noqa: TC003
+from typing import Any, cast
 
 import httpx
 
@@ -88,7 +89,7 @@ def is_video_ext(ext: str) -> bool:
 # ── Gemini Files API ─────────────────────────────────────────────────────────
 
 
-def _gemini_upload(file_path: Path, mime_type: str, api_key: str) -> dict:
+def _gemini_upload(file_path: Path, mime_type: str, api_key: str) -> dict[str, Any]:
     """Upload a file to Gemini Files API (resumable protocol)."""
     num_bytes = file_path.stat().st_size
     display_name = file_path.name
@@ -126,7 +127,7 @@ def _gemini_upload(file_path: Path, mime_type: str, api_key: str) -> dict:
         )
         resp.raise_for_status()
 
-    return resp.json()["file"]
+    return cast("dict[str, Any]", resp.json()["file"])
 
 
 def _gemini_poll(file_name: str, api_key: str, poll_interval: float = 2.0) -> None:
@@ -164,13 +165,13 @@ def _gemini_generate(
     ``extra_files`` is a list of ``(file_uri, mime_type)`` tuples to attach
     alongside the primary media (e.g. companion whiteboard images).
     """
-    parts: list[dict] = [
+    parts: list[dict[str, Any]] = [
         {"text": prompt},
         {"file_data": {"mime_type": mime_type, "file_uri": file_uri}},
     ]
     for uri, mime in extra_files or []:
         parts.append({"file_data": {"mime_type": mime, "file_uri": uri}})
-    body: dict = {"contents": [{"parts": parts}]}
+    body: dict[str, Any] = {"contents": [{"parts": parts}]}
     if system_prompt:
         body["systemInstruction"] = {"parts": [{"text": system_prompt}]}
 
@@ -201,7 +202,7 @@ def _gemini_generate(
         msg = f"Gemini candidate has no content parts (finish reason: {finish})"
         raise RuntimeError(msg)
 
-    return parts[0].get("text", "")
+    return cast("str", parts[0].get("text", ""))
 
 
 def _gemini_delete(file_name: str, api_key: str) -> None:
@@ -303,7 +304,7 @@ def process_media_openrouter(
         fmt = file_path.suffix.lstrip(".")
         if fmt == "ogg":
             fmt = "wav"  # OpenRouter may not support ogg, use wav
-        media_part: dict = {
+        media_part: dict[str, Any] = {
             "type": "input_audio",
             "input_audio": {"data": b64_data, "format": fmt},
         }
@@ -313,7 +314,7 @@ def process_media_openrouter(
             "video_url": {"url": f"data:{mime_type};base64,{b64_data}"},
         }
 
-    content_parts: list[dict] = [
+    content_parts: list[dict[str, Any]] = [
         {"type": "text", "text": prompt},
         media_part,
     ]
@@ -330,7 +331,7 @@ def process_media_openrouter(
             }
         )
 
-    messages: list[dict] = []
+    messages: list[dict[str, Any]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": content_parts})
@@ -367,7 +368,7 @@ def process_media_openrouter(
                 logger.error("%s error %d: %s", provider_label, resp.status_code, error_body)
                 resp.raise_for_status()
 
-    return resp.json()["choices"][0]["message"]["content"]
+    return cast("str", resp.json()["choices"][0]["message"]["content"])
 
 
 # ── Unified entry point ──────────────────────────────────────────────────────

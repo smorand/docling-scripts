@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import cast
 
 import httpx
 
@@ -293,7 +294,7 @@ def analyze_companion(
             )
             resp.raise_for_status()
 
-    return resp.json()["choices"][0]["message"]["content"]
+    return cast("str", resp.json()["choices"][0]["message"]["content"])
 
 
 _LANG_SENTINEL_RE = re.compile(r"^<!--\s*doc-convert:lang=([\w-]*)\s*-->\s*\n?")

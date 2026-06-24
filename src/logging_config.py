@@ -61,7 +61,7 @@ def setup_logging(*, verbose: int = 0, quiet: bool = False, source_path: str | N
     # File handler
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path_hash = hashlib.md5((source_path or "none").encode()).hexdigest()[:8]
+    path_hash = hashlib.md5((source_path or "none").encode(), usedforsecurity=False).hexdigest()[:8]
     log_file = LOG_DIR / f"doc-convert-{timestamp}-{path_hash}.log"
     file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))

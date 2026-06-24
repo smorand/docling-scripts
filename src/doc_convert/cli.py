@@ -70,7 +70,7 @@ def _download_enrichments() -> None:
 
     for repo_id in ENRICHMENT_REPO_IDS:
         console.print(f"Downloading [bold]{repo_id}[/bold] into the HF cache...")
-        path = snapshot_download(repo_id=repo_id)
+        path = snapshot_download(repo_id=repo_id)  # nosec B615 - first-party model repos, latest revision intended
         console.print(f"[green]Done.[/green] {path}")
 
 
@@ -464,11 +464,13 @@ def _dispatch(  # noqa: PLR0912, PLR0915
 
             ext = doc_path.suffix.lower()
             if ext in (".eml", ".msg"):
+                from doc_convert.base import BaseConverter  # noqa: PLC0415
                 from doc_convert.output import check_step_cache  # noqa: PLC0415
 
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
                 _register_output(out_dir)
                 eml_options = ConvertOptions(output_dir=out_dir, llm=llm, settings=settings)
+                eml_converter: BaseConverter
                 if ext == ".msg":
                     from doc_convert.converters.msg import MsgConverter  # noqa: PLC0415
 

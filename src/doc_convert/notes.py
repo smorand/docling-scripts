@@ -21,6 +21,7 @@ import logging
 import mimetypes
 import re
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 
@@ -77,7 +78,7 @@ DEFAULT_ROUTING_RULES = """\
 
 
 OAUTH2_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-OAUTH2_TOKEN_URL = "https://oauth2.googleapis.com/token"
+OAUTH2_TOKEN_URL = "https://oauth2.googleapis.com/token"  # nosec B105 - public OAuth2 endpoint URL, not a secret
 OAUTH2_REDIRECT_URI = "http://localhost:3000/oauth2callback"
 OAUTH2_SCOPES = "openid email profile"
 TOKEN_CACHE_FILE = Path.home() / ".cache" / "doc-convert" / "notes_token.json"
@@ -99,8 +100,8 @@ def _get_notes_token(settings: Settings) -> str:
     # Try cached token first
     if TOKEN_CACHE_FILE.exists():
         cached = json.loads(TOKEN_CACHE_FILE.read_text())
-        access_token = cached.get("access_token", "")
-        refresh_token = cached.get("refresh_token", "")
+        access_token: str = cached.get("access_token", "")
+        refresh_token: str = cached.get("refresh_token", "")
 
         if access_token:
             # Validate token
@@ -141,7 +142,7 @@ def _refresh_token(settings: Settings, refresh_token: str) -> str | None:
             cached["access_token"] = data["access_token"]
             TOKEN_CACHE_FILE.write_text(json.dumps(cached))
             logger.info("Notes: refreshed OAuth2 token")
-            return data["access_token"]
+            return cast("str", data["access_token"])
     except Exception:
         logger.debug("Token refresh failed")
     return None
@@ -262,7 +263,7 @@ def _run_oauth2_flow(settings: Settings) -> str:
     )
     logger.info("Notes: OAuth2 tokens cached to %s", TOKEN_CACHE_FILE)
 
-    return data["access_token"]
+    return cast("str", data["access_token"])
 
 
 KNOWN_FOLDERS = """- professional/: Work meetings, projects, partners, proposals
@@ -307,7 +308,7 @@ def _list_folders(api_base: str, token: str) -> str:
         return KNOWN_FOLDERS
 
 
-def _search_similar(api_base: str, token: str, query: str, *, mode: str = "vector") -> list[dict]:
+def _search_similar(api_base: str, token: str, query: str, *, mode: str = "vector") -> list[dict[str, Any]]:
     """Search for existing notes similar to the given content.
 
     Uses POST /api/v1/search with full content for accurate vector similarity.
@@ -338,7 +339,7 @@ def _sanitize_path(path: str) -> str:
     return sanitized.lower()
 
 
-def _store_note(api_base: str, token: str, note_data: dict) -> dict:
+def _store_note(api_base: str, token: str, note_data: dict[str, Any]) -> dict[str, Any]:
     """POST /api/v1/notes to create the note."""
     note_data["path"] = _sanitize_path(note_data["path"])
     with httpx.Client(timeout=300.0) as client:
@@ -359,7 +360,7 @@ def _store_note(api_base: str, token: str, note_data: dict) -> dict:
         if not resp.is_success:
             logger.error("Notes API error %d: %s", resp.status_code, resp.text[:500])
             resp.raise_for_status()
-    return resp.json()
+    return cast("dict[str, Any]", resp.json())
 
 
 def _generate_note_metadata(
@@ -369,7 +370,7 @@ def _generate_note_metadata(
     *,
     api_base: str,
     token: str,
-) -> dict:
+) -> dict[str, Any]:
     """Call Gemini Flash to generate {path, title, tags, type}."""
     from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
 
@@ -410,7 +411,7 @@ def _generate_note_metadata(
     # Strip markdown fences if present
     if raw.strip().startswith("```"):
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    return json.loads(raw)
+    return cast("dict[str, Any]", json.loads(raw))
 
 
 def _build_deterministic_path(folder: str, source_stem: str) -> str:

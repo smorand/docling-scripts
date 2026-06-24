@@ -37,7 +37,7 @@ def get_document_title(doc: object, pdf_path: str) -> str:
         if title:
             return title  # type: ignore[no-any-return]
     except Exception:
-        pass
+        logger.debug("Could not read PDF title metadata from %s", pdf_path, exc_info=True)
     return ""
 
 

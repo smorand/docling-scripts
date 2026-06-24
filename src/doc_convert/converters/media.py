@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path  # noqa: TC003
 
-from doc_convert.base import BaseConverter
+from doc_convert.base import BaseConverter, ConvertOptions
 from doc_convert.output import print_output_summary
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class MediaConverter(BaseConverter):
     def __init__(
         self,
         source: Path,
-        options: ConvertOptions,  # noqa: F821
+        options: ConvertOptions,
         *,
         media_type: str,
         meeting: str | None = None,
@@ -264,6 +264,8 @@ class MediaConverter(BaseConverter):
         url = get_provider_url(provider, self.options.settings) if provider != "google" else None
         meeting_ctx = meeting or self.meeting
 
+        a_prompt: str
+        a_system: str | None
         if instructions:
             a_prompt = instructions
             a_system = f"Context: {meeting_ctx}\n\n{instructions}" if meeting_ctx else instructions

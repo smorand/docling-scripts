@@ -36,7 +36,7 @@ def configure_tracing(service_name: str, *, source_path: str | None = None) -> N
         otel_dir = Path.home() / ".local" / "share" / "doc-convert"
         otel_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path_hash = hashlib.md5((source_path or "none").encode()).hexdigest()[:8]
+        path_hash = hashlib.md5((source_path or "none").encode(), usedforsecurity=False).hexdigest()[:8]
         log_file = (otel_dir / f"{service_name}-otel-{timestamp}-{path_hash}.log").open("a")
         exporter = ConsoleSpanExporter(out=log_file)
         provider.add_span_processor(SimpleSpanProcessor(exporter))
