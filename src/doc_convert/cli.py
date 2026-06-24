@@ -421,7 +421,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
         from video import download_youtube  # noqa: PLC0415
 
         downloaded = download_youtube(document)
-        out_dir = resolve_output_dir(Path.cwd(), downloaded.stem, output)
+        out_dir = resolve_output_dir(None, downloaded.stem, output)
         _register_output(out_dir)
         try:
             _run_media(
