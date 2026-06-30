@@ -77,11 +77,11 @@ class ImageConverter(BaseConverter):
     """Image/PDF conversion via external LLM VlmPipeline."""
 
     def convert(self) -> None:
+        import typer  # noqa: PLC0415
+
+        from logging_config import console  # noqa: PLC0415
+
         if not self.options.llm:
-            import typer  # noqa: PLC0415
-
-            from logging_config import console  # noqa: PLC0415
-
             console.print("[red]Image and PDF --engine llm conversion requires --llm <provider/model>[/red]")
             raise typer.Exit(1)
 
@@ -89,6 +89,13 @@ class ImageConverter(BaseConverter):
 
         provider, model = parse_external_llm(self.options.llm)
         md = convert_image_to_markdown(self.source, provider, model, self.options.settings)
+        if not md.strip():
+            console.print(
+                f"[red]Conversion produced no text for {self.source.name} "
+                f"({provider}/{model}). The model may be unavailable or returned "
+                "an error. Re-run with -vv to see the API response.[/red]"
+            )
+            raise typer.Exit(1)
         self.ensure_output_dir()
         self.write_document_md(md)
         self.print_summary()

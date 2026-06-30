@@ -21,7 +21,9 @@ from logging_config import console
 
 logger = logging.getLogger(__name__)
 
-# Files that, if present in an output directory, mean we should keep it.
+# Files that, if present AND non-empty, mean we should keep the directory. A
+# 0-byte marker is a silently failed conversion (e.g. the VLM API returned an
+# error and docling exported an empty document), not a real artifact.
 _KEEP_MARKERS: tuple[str, ...] = ("document.md", "audio.ogg")
 
 
@@ -49,7 +51,11 @@ def register(out_dir: Path) -> None:
 
 
 def _has_keep_marker(out_dir: Path) -> bool:
-    return any((out_dir / name).exists() for name in _KEEP_MARKERS)
+    for name in _KEEP_MARKERS:
+        marker = out_dir / name
+        if marker.exists() and marker.stat().st_size > 0:
+            return True
+    return False
 
 
 def _cleanup_guard(guard: _Guard) -> None:

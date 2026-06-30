@@ -76,7 +76,7 @@ src/
 - Conversion paths:
   - PDF `--engine local` (default): Docling layout + OCR + tables; figures captioned via `BaseConverter.describe_figures` (honors `--captions`). OCR engine selected by `--ocr-model` (default cloud LLM `google/gemini-3.1-pro-preview` via `ocr_llm.LlmOcrModel`; or `local` Tesseract CLI). Docling's flaky "auto" OCR is bypassed: we always set an explicit `ocr_options`.
   - PDF `--engine llm`: rasterize each page → `--llm` (whole page markdown). Same code path as Image.
-  - Image: always `--engine llm` (requires `--llm`).
+  - Image: always `--engine llm` (requires `--llm`). If the model returns empty markdown (e.g. an unavailable/retired model such as the old `gemini-3-pro-preview`, which the Google API 404s while docling still reports `SUCCESS`), `ImageConverter.convert` fails loudly with `typer.Exit(1)` instead of writing a 0-byte `document.md`. Re-run with `-vv` to see the API response.
   - DOCX / PPTX: native XML / python-pptx for body, `describe_figures` for picture captions.
   - XLSX: native, no LLM.
   - EML / MSG: Docling HTML backend on the body, attachments recursively converted under `attachments/<basename>_docling/`, inlined as `## Attachments` sub-sections.
@@ -93,7 +93,7 @@ src/
 - Cache: skip conversion if output exists, use `-f` to force.
 - Unified output: all conversions write to `<name>_docling/document.md`.
 - Apple Silicon: PDF pipeline and local captioner auto-retry on CPU when an MPS float64 error is raised (detection in `vlm.is_mps_float64_error`). `--cpu` is still available to force CPU from the start.
-- Output guard (`doc_convert.output_guard`): every output dir is registered before mkdir; on any failure (exception, Ctrl+C, SIGTERM/SIGHUP/SIGQUIT, typer.Exit), `cleanup_pending()` runs in a `finally` block and removes the dir if it was newly created and contains no `document.md` or `audio.ogg`. Pre-existing dirs keep their original content; only files added by the failed run are removed. SIGKILL cannot be caught.
+- Output guard (`doc_convert.output_guard`): every output dir is registered before mkdir; on any failure (exception, Ctrl+C, SIGTERM/SIGHUP/SIGQUIT, typer.Exit), `cleanup_pending()` runs in a `finally` block and removes the dir if it was newly created and contains no **non-empty** `document.md` or `audio.ogg` (a 0-byte marker is a silently-failed conversion, not an artifact, and is cleaned up too). Pre-existing dirs keep their original content; only files added by the failed run are removed. SIGKILL cannot be caught.
 
 ## Quality Gate
 

@@ -43,6 +43,19 @@ def test_cleanup_keeps_dir_with_marker(tmp_path: Path) -> None:
     assert (out / "document.md").exists()
 
 
+def test_cleanup_removes_dir_with_empty_marker(tmp_path: Path) -> None:
+    """A 0-byte document.md means the conversion failed silently, not a success.
+
+    Regression: an empty marker must NOT keep the directory alive.
+    """
+    out = tmp_path / "doc_docling"
+    output_guard.register(out)
+    out.mkdir()
+    (out / "document.md").write_text("")
+    output_guard.cleanup_pending()
+    assert not out.exists()
+
+
 def test_cleanup_preserves_preexisting_content(tmp_path: Path) -> None:
     out = tmp_path / "doc_docling"
     out.mkdir()
