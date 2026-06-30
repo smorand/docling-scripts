@@ -24,12 +24,13 @@ doc-convert video.mp4 --analyze                                # Extract + summa
 doc-convert meeting.ogg --meeting-summary                      # Audio only: HTML brief opened in browser
 ```
 
-### Flag surface (3 axes)
+### Flag surface (4 axes)
 
 - `--llm <provider/model>` — remote model identity (captions, document analysis, `--engine llm`, and as fallback for media when `--media-llm` is not set).
 - `--media-llm <provider/model>` — overrides the LLM used for audio/video conversion + media analysis only. Precedence: `--media-llm` > `--llm` > `google/gemini-3.1-pro-preview` (Files API default; required for big recordings).
 - `--captions <off|preset|provider/model>` — figure captioner. Defaults to `--llm` if set, else first cloud with creds from `AUTO_CAPTIONS_PREFERENCES` (today: `ibm/claude-haiku-4-5` → `google/gemini-3.1-flash-lite-preview`), else local `smolvlm`.
 - `--engine local|llm` — PDF/image body parser. `local` (default for PDF) uses Docling; `llm` rasterizes pages to `--llm`. Images always `llm`.
+- `--ocr-model <off|local|provider/model>` — OCR engine for the `--engine local` PDF pipeline (the per-region text-from-bitmap stage; only fires on scanned/image content). Default = cloud LLM `DEFAULT_OCR_MODEL` (`google/gemini-3.1-pro-preview`, via `ocr_llm.LlmOcrModel`); since OCR only fires on bitmap regions, born-digital PDFs cost nothing. `local` = Tesseract CLI (system binary; `tesseract-lang` packs needed for non-eng). Does NOT auto-inherit `--llm` (the OCR model is chosen by this axis alone). `--no-ocr` is an alias for `off`. Note: for fully-scanned docs `--engine llm` (whole-page) usually beats LLM OCR (which reads one region-blob at a time).
 
 ## Project Structure
 
@@ -40,7 +41,7 @@ src/
 │   ├── cli.py            # Typer CLI entry point + dispatch
 │   ├── base.py           # BaseConverter + ConvertOptions
 │   ├── converters/       # One class per document type
-│   │   ├── pdf.py        # PdfConverter (local Docling pipeline; captions via base.describe_figures)
+│   │   ├── pdf.py        # PdfConverter (local Docling pipeline; captions via base.describe_figures; OCR engine via _build_ocr_options)
 │   │   ├── docx.py       # DocxConverter (Docling native XML + figure captions)
 │   │   ├── xlsx.py       # XlsxConverter
 │   │   ├── pptx.py       # PptxConverter (Docling + python-pptx + figure captions)
@@ -50,9 +51,10 @@ src/
 │   │   └── media.py      # MediaConverter (audio/video → --llm + audio sections + video chunking)
 │   ├── markdown.py       # build_document_markdown (inlined figure/table descriptions), build_images_catalog, collect_floating_contexts
 │   ├── vlm.py            # Caption description pipelines (local HF + external API)
-│   ├── providers.py      # External LLM provider config + parsing
+│   ├── ocr_llm.py        # LlmOcrModel: cloud-LLM OCR engine for the local PDF pipeline (registers with docling's OCR factory)
+│   ├── providers.py      # External LLM provider config + parsing (incl. get_ocr_prompt)
 │   ├── google_docs.py    # Google Docs/Sheets download
-│   ├── formats.py        # Format detection, Engine enum, CaptionsSpec parsing
+│   ├── formats.py        # Format detection, Engine enum, CaptionsSpec + OcrSpec parsing
 │   ├── output.py         # Output dir helpers, cache check
 │   ├── recursive.py      # convert_children helper (sub-doc recursion for email PJs + audio companions)
 │   └── meeting_summary.py # --meeting-summary runtime (audio → summary.html via analyze model)
@@ -72,7 +74,7 @@ src/
 - Config: pydantic-settings (not os.environ)
 - Logging: Rich + logging module (not print)
 - Conversion paths:
-  - PDF `--engine local` (default): Docling layout + OCR + tables; figures captioned via `BaseConverter.describe_figures` (honors `--captions`).
+  - PDF `--engine local` (default): Docling layout + OCR + tables; figures captioned via `BaseConverter.describe_figures` (honors `--captions`). OCR engine selected by `--ocr-model` (default cloud LLM `google/gemini-3.1-pro-preview` via `ocr_llm.LlmOcrModel`; or `local` Tesseract CLI). Docling's flaky "auto" OCR is bypassed: we always set an explicit `ocr_options`.
   - PDF `--engine llm`: rasterize each page → `--llm` (whole page markdown). Same code path as Image.
   - Image: always `--engine llm` (requires `--llm`).
   - DOCX / PPTX: native XML / python-pptx for body, `describe_figures` for picture captions.

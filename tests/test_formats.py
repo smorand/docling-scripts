@@ -14,9 +14,14 @@ from doc_convert.formats import (
     CaptionsLocal,
     CaptionsOff,
     Engine,
+    OcrLlm,
+    OcrLocal,
+    OcrOff,
     detect_format,
     parse_captions,
+    parse_ocr_model,
     resolve_captions,
+    resolve_ocr_model,
 )
 
 
@@ -72,3 +77,42 @@ def test_resolve_captions_auto_prefers_credentialed_cloud(google_settings: Setti
 def test_resolve_captions_local_default_when_no_creds(empty_settings: Settings) -> None:
     spec = resolve_captions(None, None, empty_settings)
     assert spec == CaptionsLocal("smolvlm")
+
+
+# ── --ocr-model parsing ───────────────────────────────────────────────────
+
+
+def test_parse_ocr_model_off() -> None:
+    assert parse_ocr_model("off") == OcrOff()
+
+
+def test_parse_ocr_model_local_aliases() -> None:
+    assert parse_ocr_model("local") == OcrLocal("tesseract")
+    assert parse_ocr_model("tesseract") == OcrLocal("tesseract")
+
+
+def test_parse_ocr_model_llm_slug() -> None:
+    assert parse_ocr_model("ibm/claude-haiku-4-5") == OcrLlm("ibm", "claude-haiku-4-5")
+
+
+def test_parse_ocr_model_invalid() -> None:
+    with pytest.raises(typer.Exit):
+        parse_ocr_model("not-an-engine")
+
+
+def test_resolve_ocr_model_default_is_gemini() -> None:
+    assert resolve_ocr_model(None, no_ocr=False) == OcrLlm("google", "gemini-3.1-pro-preview")
+
+
+def test_resolve_ocr_model_local_uses_tesseract() -> None:
+    assert resolve_ocr_model("local", no_ocr=False) == OcrLocal("tesseract")
+
+
+def test_resolve_ocr_model_no_ocr_wins() -> None:
+    # --no-ocr overrides any explicit --ocr-model value.
+    assert resolve_ocr_model("ibm/claude-haiku-4-5", no_ocr=True) == OcrOff()
+    assert resolve_ocr_model(None, no_ocr=True) == OcrOff()
+
+
+def test_resolve_ocr_model_explicit_llm() -> None:
+    assert resolve_ocr_model("ibm/claude-haiku-4-5", no_ocr=False) == OcrLlm("ibm", "claude-haiku-4-5")

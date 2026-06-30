@@ -90,6 +90,82 @@ class CaptionsLlm:
 CaptionsSpec = CaptionsOff | CaptionsLocal | CaptionsLlm
 
 
+# ── OCR engine selection (--ocr-model) ───────────────────────────────────
+# OCR is the per-region "text from bitmap" stage of the local PDF pipeline.
+# It only fires on scanned/image content; born-digital text bypasses it.
+LOCAL_OCR_ENGINES: tuple[str, ...] = ("tesseract",)
+DEFAULT_OCR_ENGINE = "tesseract"
+# Default OCR model when --ocr-model is omitted: a cloud LLM reads scanned/image
+# regions. OCR only fires on bitmap content, so born-digital PDFs cost nothing.
+# Use --ocr-model local for the offline Tesseract CLI engine instead.
+DEFAULT_OCR_MODEL = "google/gemini-3.1-pro-preview"
+
+
+@dataclass(frozen=True)
+class OcrOff:
+    """OCR disabled; only the embedded text layer is used."""
+
+
+@dataclass(frozen=True)
+class OcrLocal:
+    """Local docling OCR engine (Tesseract CLI)."""
+
+    engine: str = DEFAULT_OCR_ENGINE
+
+
+@dataclass(frozen=True)
+class OcrLlm:
+    """Remote LLM OCR: each image region is read by a cloud model (provider/model)."""
+
+    provider: str
+    model: str
+
+
+OcrSpec = OcrOff | OcrLocal | OcrLlm
+
+
+def parse_ocr_model(value: str) -> OcrSpec:
+    """Parse an --ocr-model value: 'off', a local engine name, or a 'provider/model' slug."""
+    from doc_convert.providers import parse_external_llm  # noqa: PLC0415
+
+    if value == "off":
+        return OcrOff()
+    if "/" in value:
+        provider, model = parse_external_llm(value)
+        return OcrLlm(provider, model)
+    if value == "local" or value in LOCAL_OCR_ENGINES:
+        return OcrLocal(DEFAULT_OCR_ENGINE)
+    engines = ", ".join(LOCAL_OCR_ENGINES)
+    console.print(
+        f"[red]Invalid --ocr-model value '{value}'. Expected: off, a local engine "
+        f"({engines}) or 'local', or a 'provider/model' slug.[/red]"
+    )
+    raise typer.Exit(1)
+
+
+def resolve_ocr_model(value: str | None, *, no_ocr: bool) -> OcrSpec:
+    """Resolve the OCR spec, applying defaults.
+
+    Precedence:
+        1. ``--no-ocr`` (legacy flag) forces OCR off.
+        2. Explicit ``--ocr-model`` value (off, local engine, or provider/model).
+        3. Default: the cloud LLM in ``DEFAULT_OCR_MODEL`` (Gemini). OCR only
+           fires on scanned/image regions, so born-digital PDFs incur no cost
+           or credential requirement. Use ``--ocr-model local`` for Tesseract.
+
+    Note: unlike ``--captions``, OCR does NOT auto-inherit ``--llm``. The OCR
+    model is chosen by this axis alone.
+    """
+    from doc_convert.providers import parse_external_llm  # noqa: PLC0415
+
+    if no_ocr:
+        return OcrOff()
+    if value is not None:
+        return parse_ocr_model(value)
+    provider, model = parse_external_llm(DEFAULT_OCR_MODEL)
+    return OcrLlm(provider, model)
+
+
 def parse_captions(value: str) -> CaptionsSpec:
     """Parse a --captions value: 'off', a local preset, or a 'provider/model' slug."""
     from doc_convert.providers import parse_external_llm  # noqa: PLC0415

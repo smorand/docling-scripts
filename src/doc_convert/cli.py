@@ -11,10 +11,13 @@ from config import Settings
 from doc_convert.base import ConvertOptions
 from doc_convert.formats import (
     DEFAULT_LOCAL_PRESET,
+    DEFAULT_OCR_MODEL,
+    LOCAL_OCR_ENGINES,
     LOCAL_PRESETS,
     PRESET_REPO_IDS,
     Engine,
     resolve_captions,
+    resolve_ocr_model,
 )
 from doc_convert.output import make_document_symlink, resolve_output_dir
 from doc_convert.output_guard import cleanup_pending as _cleanup_outputs
@@ -132,8 +135,19 @@ def main(
     no_ocr: bool = typer.Option(
         False,
         "--no-ocr",
-        help="Disable OCR (PDF only, --engine local)",
+        help="Disable OCR (PDF only, --engine local). Alias for --ocr-model off.",
         show_default="off (OCR enabled)",
+    ),
+    ocr_model: str | None = typer.Option(
+        None,
+        "--ocr-model",
+        help=(
+            "OCR engine for the local PDF pipeline (reads text from scanned/image regions). "
+            f"One of: 'off', a local engine ({', '.join(LOCAL_OCR_ENGINES)}) or 'local', "
+            "or a 'provider/model' slug to read regions with a cloud LLM. "
+            "Defaults to a cloud LLM (Gemini); does not auto-inherit --llm."
+        ),
+        show_default=DEFAULT_OCR_MODEL,
     ),
     no_figures: bool = typer.Option(
         False,
@@ -299,6 +313,7 @@ def main(
             captions=captions,
             engine=engine,
             no_ocr=no_ocr,
+            ocr_model=ocr_model,
             no_figures=no_figures,
             cpu=cpu,
             all_formats=all_formats,
@@ -333,6 +348,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
     captions: str | None,
     engine: Engine,
     no_ocr: bool,
+    ocr_model: str | None,
     no_figures: bool,
     cpu: bool,
     all_formats: bool,
@@ -568,6 +584,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             figures=not no_figures,
             all_formats=all_formats,
             do_ocr=not no_ocr,
+            ocr=resolve_ocr_model(ocr_model, no_ocr=no_ocr),
             cpu=cpu,
             engine=engine,
             captions=captions_spec,

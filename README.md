@@ -26,12 +26,13 @@ Local captioner presets: `smolvlm`, `granite_vision`, `pixtral`, `qwen`.
 
 All conversions write to a `<name>_docling/` directory with `document.md` as the main file.
 
-### The three flags that matter
+### The flags that matter
 
 - `--llm <provider/model>` — remote model identity. Used for captions, document analysis, PDF/image `--engine llm`, and as fallback for media when `--media-llm` is not given.
 - `--media-llm <provider/model>` — overrides the LLM used for audio/video conversion and media analysis only. Precedence: `--media-llm` > `--llm` > `google/gemini-3.1-pro-preview` (default uses Gemini Files API; required for big recordings since `ibm/` and `openrouter/` send inline base64 and fail on large media).
 - `--captions <value>` — figure captioner. Value is `off`, a local preset (`smolvlm`, `granite_vision`, `pixtral`, `qwen`), or a `provider/model` slug. Defaults: same as `--llm` if set, else `ibm/claude-haiku-4-5` if `IBM_ICA_MODEL_KEY` + `IBM_ICA_BASE_URL` are configured, else `google/gemini-3.1-flash-lite-preview` if `GOOGLE_API_KEY` is in env, else local `smolvlm`.
 - `--engine local|llm` — PDF/image body extraction. `local` (default) uses Docling layout + OCR + tables. `llm` rasterizes each page and sends it to `--llm` (whole document is described by the model). Images always use `llm`.
+- `--ocr-model <value>` — OCR engine for the `--engine local` PDF pipeline. OCR is the per-region "text from bitmap" stage; it only fires on scanned/image content, so born-digital PDFs are unaffected (and incur no LLM cost even with the LLM default). Value is `off` (alias for `--no-ocr`), `local` (Tesseract CLI via the system `tesseract` binary), or a `provider/model` slug to read each image region with a cloud LLM. **Default: `google/gemini-3.1-pro-preview`.** Unlike `--captions`, it does **not** auto-inherit `--llm`. For fully-scanned documents prefer `--engine llm` (reads whole pages); LLM OCR shines on mostly-digital docs with small embedded image-text. The `local` engine needs the `tesseract` binary, plus language packs (`brew install tesseract-lang`) for anything beyond the bundled `eng`.
 
 ### PDF
 
@@ -60,7 +61,12 @@ doc-convert document.pdf --no-figures
 doc-convert document.pdf --captions off
 
 # Disable OCR (local pipeline only)
-doc-convert document.pdf --no-ocr
+doc-convert document.pdf --no-ocr        # same as --ocr-model off
+
+# Pick the OCR engine for scanned/image regions (local pipeline keeps figures + tables)
+doc-convert document.pdf                                    # default: Gemini reads scanned regions
+doc-convert document.pdf --ocr-model local                  # offline Tesseract CLI
+doc-convert document.pdf --ocr-model ibm/claude-haiku-4-5   # a different cloud LLM
 
 # Apple Silicon: --cpu forces CPU from the start. If omitted, the PDF pipeline and
 # local captioner auto-fall back to CPU when an MPS float64 error is raised.

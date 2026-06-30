@@ -11,11 +11,15 @@ from pathlib import Path
 from config import Settings
 from doc_convert.formats import (
     DEFAULT_LOCAL_PRESET,
+    DEFAULT_OCR_ENGINE,
     CaptionsLlm,
     CaptionsLocal,
     CaptionsOff,
     CaptionsSpec,
     Engine,
+    OcrLocal,
+    OcrOff,
+    OcrSpec,
 )
 from doc_convert.output import print_output_summary
 
@@ -72,6 +76,7 @@ class ConvertOptions:
     cpu: bool = False
     engine: Engine = Engine.LOCAL
     captions: CaptionsSpec = field(default_factory=lambda: CaptionsLocal(DEFAULT_LOCAL_PRESET))
+    ocr: OcrSpec = field(default_factory=lambda: OcrLocal(DEFAULT_OCR_ENGINE))
     llm: str | None = None
     settings: Settings = field(default_factory=Settings)
 
@@ -82,6 +87,11 @@ class ConvertOptions:
     @property
     def captions_enabled(self) -> bool:
         return not isinstance(self.captions, CaptionsOff)
+
+    @property
+    def ocr_enabled(self) -> bool:
+        """OCR runs only when not disabled by --no-ocr and the spec is not 'off'."""
+        return self.do_ocr and not isinstance(self.ocr, OcrOff)
 
 
 class BaseConverter(ABC):

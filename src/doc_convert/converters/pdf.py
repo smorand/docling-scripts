@@ -39,10 +39,11 @@ class PdfConverter(BaseConverter):
         from tracing import trace_span  # noqa: PLC0415
 
         self.ensure_output_dir()
+        do_ocr = self.options.ocr_enabled
 
         def build_converter(force_cpu: bool) -> DocumentConverter:
             pipeline_options = PdfPipelineOptions(
-                do_ocr=self.options.do_ocr,
+                do_ocr=do_ocr,
                 do_table_structure=True,
                 table_structure_options=TableStructureV2Options(),
                 do_formula_enrichment=True,
@@ -57,6 +58,8 @@ class PdfConverter(BaseConverter):
                 do_picture_classification=self.options.figures,
                 images_scale=2.0,
             )
+            if do_ocr:
+                pipeline_options.ocr_options = _build_ocr_options(self.options.ocr)
             if force_cpu or self.options.cpu:
                 from docling.datamodel.accelerator_options import (  # noqa: PLC0415
                     AcceleratorDevice,
@@ -127,6 +130,27 @@ class PdfConverter(BaseConverter):
             captions_used=self.options.captions_enabled and (fig_count > 0 or tbl_count > 0),
             desc_count=len(artifacts.figure_descriptions) + len(artifacts.table_descriptions),
         )
+
+
+def _build_ocr_options(spec: object):  # type: ignore[no-untyped-def]
+    """Map an :class:`OcrSpec` to docling OCR options.
+
+    ``OcrLocal`` → Tesseract CLI (cross-platform, uses the system binary).
+    ``OcrLlm`` → the custom :class:`LlmOcrModel`, registered on first use.
+    """
+    from doc_convert.formats import OcrLlm  # noqa: PLC0415
+
+    if isinstance(spec, OcrLlm):
+        from doc_convert.ocr_llm import LlmOcrOptions, register_llm_ocr  # noqa: PLC0415
+
+        register_llm_ocr()
+        logger.info("OCR engine: LLM (%s/%s)", spec.provider, spec.model)
+        return LlmOcrOptions(provider=spec.provider, model=spec.model)
+
+    from docling.datamodel.pipeline_options import TesseractCliOcrOptions  # noqa: PLC0415
+
+    logger.info("OCR engine: Tesseract CLI")
+    return TesseractCliOcrOptions()
 
 
 def _build_context_blocks(contexts: dict[str, FloatingContext]) -> dict[str, str]:

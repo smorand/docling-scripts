@@ -76,6 +76,22 @@ def get_table_prompt() -> str:
     return get_prompt("document", "table_prompt", _DEFAULT_TABLE_PROMPT)
 
 
+_DEFAULT_OCR_PROMPT = (
+    "Transcribe ALL text visible in this image exactly as it appears, "
+    "preserving the reading order and line breaks. Reproduce numbers, labels, "
+    "and punctuation verbatim. Do not translate, summarize, describe, or add "
+    "any commentary. Output only the raw transcribed text, with no markdown "
+    "code fences and no preamble."
+)
+
+
+def get_ocr_prompt() -> str:
+    """Prompt used by the LLM OCR engine to transcribe a single image region."""
+    from doc_convert.prompt_config import get_prompt  # noqa: PLC0415
+
+    return get_prompt("document", "ocr_prompt", _DEFAULT_OCR_PROMPT)
+
+
 _DEFAULT_MEETING_SUMMARY_CSS = """\
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
