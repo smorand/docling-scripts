@@ -155,6 +155,12 @@ doc-convert outlook_message.msg --analyze
 # and a ## Attachments section is appended to document.md.
 ```
 
+The email body is rendered with `html2text` after a cleanup pass (tracking
+pixels, spacer gifs and empty tracking anchors are removed). Link URLs are
+preserved and the layout tables that marketing/HR emails are built from are
+flattened into readable paragraphs. Remote images are never downloaded, so
+opening a converted email does not trigger any open-tracking beacon.
+
 ### Cache and output
 
 ```bash

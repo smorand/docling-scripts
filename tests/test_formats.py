@@ -9,6 +9,7 @@ import typer
 from docling.datamodel.base_models import InputFormat
 
 from config import Settings
+from doc_convert.converters.eml import _html_to_markdown
 from doc_convert.formats import (
     CaptionsLlm,
     CaptionsLocal,
@@ -116,3 +117,77 @@ def test_resolve_ocr_model_no_ocr_wins() -> None:
 
 def test_resolve_ocr_model_explicit_llm() -> None:
     assert resolve_ocr_model("ibm/claude-haiku-4-5", no_ocr=False) == OcrLlm("ibm", "claude-haiku-4-5")
+
+
+# ── email HTML → markdown ─────────────────────────────────────────────────
+
+
+def test_html_to_markdown_flattens_layout_tables_and_keeps_links() -> None:
+    # Marketing/HR emails wrap real content in nested layout tables. Docling
+    # collapsed all of this into one giant table cell and dropped link URLs;
+    # the html2text path must yield readable paragraphs with links intact.
+    html = """
+    <table><tr><td>
+      <table><tr><td>
+        <p>Chers IBMers,</p>
+        <p>Voir la <a href="https://example.com/proc">procédure</a> ici.</p>
+      </td></tr></table>
+    </td></tr></table>
+    """
+    md = _html_to_markdown(html)
+
+    assert "Chers IBMers," in md
+    assert "[procédure](https://example.com/proc)" in md
+    assert "| --- |" not in md  # no markdown table skeleton
+    assert "\n" in md  # broken into paragraphs, not one line
+
+
+def test_html_to_markdown_strips_tracking_and_spacer_images() -> None:
+    html = """
+    <p>Bonjour</p>
+    <img src="https://cdn.example.com/IMAGE-PLACEHOLDER-ONLY-SPACER-1x1.gif">
+    <img src="https://track.example.com/trk?t=1&mid=abc" width="1" height="1">
+    <a href="https://track.example.com/open?id=42"></a>
+    """
+    md = _html_to_markdown(html)
+
+    assert "Bonjour" in md
+    assert "trk?" not in md
+    assert "spacer" not in md.lower()
+    assert "[ ]" not in md  # empty tracking anchors removed
+
+
+def test_html_to_markdown_keeps_data_table_inside_layout_table() -> None:
+    # A genuine data table (header cells) nested in a presentation/layout table
+    # must survive as a real markdown table; the layout wrapper is unwrapped.
+    html = """
+    <table role="presentation"><tr><td>
+      <p>Barème :</p>
+      <table>
+        <tr><th>Statut</th><th>Durée</th></tr>
+        <tr><td>Cadre</td><td>180j</td></tr>
+        <tr><td>Non-cadre</td><td>90j</td></tr>
+      </table>
+    </td></tr></table>
+    """
+    md = _html_to_markdown(html)
+
+    assert "Barème :" in md
+    assert "| Statut" in md  # rendered as a markdown table
+    assert "| --- |" in md or "|---" in md or "|--" in md  # header separator row
+    assert "Cadre" in md and "180j" in md
+
+
+def test_html_to_markdown_escaped_dashes_become_tight_bullets() -> None:
+    html = """
+    <p>Contacts :</p>
+    <p>- Médecins du travail</p>
+    <p>- Assistantes sociales</p>
+    <p>- Ligne d'écoute</p>
+    """
+    md = _html_to_markdown(html)
+
+    assert "\\-" not in md  # no escaped dashes left
+    assert "- Médecins du travail" in md
+    # consecutive bullets are tight (no blank line between them)
+    assert "- Médecins du travail\n- Assistantes sociales" in md
