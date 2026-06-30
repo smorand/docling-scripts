@@ -23,6 +23,8 @@ dependencies = [
     "python-pptx>=1.0.0",
     "pyyaml>=6.0",
     "extract-msg>=0.55.0",
+    "html2text>=2024.2.26",
+    "beautifulsoup4>=4.12.0",
 ]
 
 [dependency-groups]
@@ -116,6 +118,8 @@ module = [
     "yaml.*",
     "mailparser",
     "extract_msg",
+    "html2text",
+    "bs4",
 ]
 ignore_missing_imports = true
 
