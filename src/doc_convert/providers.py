@@ -234,9 +234,9 @@ def parse_external_llm(value: str) -> tuple[str, str]:
     """Parse 'provider/model' into (provider, model).
 
     Examples:
-        google/gemini-3-flash-preview -> ("google", "gemini-3-flash-preview")
-        openrouter/google/gemini-3-pro-preview -> ("openrouter", "google/gemini-3-pro-preview")
-        ibm/gemini-3-pro-preview -> ("ibm", "gemini-3-pro-preview")
+        google/gemini-3.1-flash-preview -> ("google", "gemini-3.1-flash-preview")
+        openrouter/google/gemini-3.1-pro-preview -> ("openrouter", "google/gemini-3.1-pro-preview")
+        ibm/gemini-3.1-pro-preview -> ("ibm", "gemini-3.1-pro-preview")
     """
     for provider in SUPPORTED_PROVIDERS:
         prefix = f"{provider}/"

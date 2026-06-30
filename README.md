@@ -85,7 +85,7 @@ doc-convert slides.pptx
 
 # Explicit external captioner
 doc-convert deck.docx --llm openrouter/anthropic/claude-haiku-4.5
-doc-convert slides.pptx --llm ibm/gemini-3-pro-preview
+doc-convert slides.pptx --llm ibm/gemini-3.1-pro-preview
 
 # Local captioner only, ignore any env auto-routing
 doc-convert deck.docx --captions qwen
