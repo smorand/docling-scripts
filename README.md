@@ -29,7 +29,7 @@ All conversions write to a `<name>_docling/` directory with `document.md` as the
 ### The flags that matter
 
 - `--llm <provider/model>` — remote model identity. Used for captions, document analysis, PDF/image `--engine llm`, and as fallback for media when `--media-llm` is not given.
-- `--media-llm <provider/model>` — overrides the LLM used for audio/video conversion and media analysis only. Precedence: `--media-llm` > `--llm` > `google/gemini-3.1-pro-preview` (default uses Gemini Files API; required for big recordings since `ibm/` and `openrouter/` send inline base64 and fail on large media).
+- `--media-llm <provider/model>` — overrides the LLM used for audio/video conversion and media analysis only. Precedence: `--media-llm` > `--llm` > a per-type default. **Audio defaults to `ibm/gemini-3.1-pro-preview`**: audio is normalised to a compact mono 16 kHz OGG Opus copy and split with overlap when needed (see below), so it fits the inline payload limit and runs on the single IBM credential. **Video defaults to `google/gemini-3.1-pro-preview`**: it uploads via the Gemini Files API (no size limit), which large video needs since `ibm/` and `openrouter/` send inline base64.
 - `--captions <value>` — figure captioner. Value is `off`, a local preset (`smolvlm`, `granite_vision`, `pixtral`, `qwen`), or a `provider/model` slug. Defaults: same as `--llm` if set, else `ibm/claude-haiku-4-5` if `IBM_ICA_MODEL_KEY` + `IBM_ICA_BASE_URL` are configured, else local `smolvlm`.
 - `--engine local|llm` — PDF/image body extraction. `local` (default) uses Docling layout + OCR + tables. `llm` rasterizes each page and sends it to `--llm` (whole document is described by the model). Images always use `llm`.
 - `--ocr-model <value>` — OCR engine for the `--engine local` PDF pipeline. OCR is the per-region "text from bitmap" stage; it only fires on scanned/image content, so born-digital PDFs are unaffected (and incur no LLM cost even with the LLM default). Value is `off` (alias for `--no-ocr`), `local` (Tesseract CLI via the system `tesseract` binary), or a `provider/model` slug to read each image region with a cloud LLM. **Default: `ibm/gemini-3.1-pro-preview`** (IBM ICA fronts Gemini, so no separate `GOOGLE_API_KEY` is needed; per-region crops go inline, so the missing Files API on `ibm/` is irrelevant here). Unlike `--captions`, it does **not** auto-inherit `--llm`. For fully-scanned documents prefer `--engine llm` (reads whole pages); LLM OCR shines on mostly-digital docs with small embedded image-text. The `local` engine needs the `tesseract` binary, plus language packs (`brew install tesseract-lang`) for anything beyond the bundled `eng`.
@@ -110,7 +110,8 @@ doc-convert scan.png --llm google/gemini-3.1-pro-preview
 ### Audio
 
 ```bash
-# Transcription with speaker diarization (defaults to google/gemini-3.1-pro-preview)
+# Transcription with speaker diarization (defaults to ibm/gemini-3.1-pro-preview)
+# Any audio format works, incl. .opus; it is normalised to a compact ogg first.
 doc-convert meeting.ogg
 
 # Transcription + text analysis on the consolidated document.md
@@ -203,9 +204,9 @@ doc-convert invoice.pdf --note --note-force
 | OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` | |
 | IBM ICA (OpenAI-compatible) | `ibm/<model>` | `IBM_ICA_MODEL_KEY` | requires `IBM_ICA_BASE_URL` |
 
-Audio and video default to `google/gemini-3.1-pro-preview` if `--llm` is not given. The `google/` provider uploads media via the Gemini Files API, so there is no payload size limit.
+Media defaults depend on the type when `--media-llm`/`--llm` is not given: **audio → `ibm/gemini-3.1-pro-preview`**, **video → `google/gemini-3.1-pro-preview`**.
 
-For IBM ICA and OpenRouter, audio/video files are sent inline (base64) via the chat completions endpoint; the Gemini Files API is not used. Large media will fail with a 502, so prefer the `google/` provider for recordings.
+Audio is first normalised to a compact mono 16 kHz OGG Opus copy (~14 MB/h) and, for inline providers (`ibm/`, `openrouter/`), split into 1-minute-overlapping parts when it would exceed the inline payload limit (~50 MB), so it always fits and can run on the single IBM credential. Video uses the `google/` Gemini Files API (upload then generate), which has no payload size limit — needed because `ibm/` and `openrouter/` send media inline (base64) and large video would fail with a 502.
 
 ## System Dependencies
 

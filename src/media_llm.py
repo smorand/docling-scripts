@@ -47,6 +47,7 @@ def get_image_mime(path: Path) -> str:
 
 AUDIO_MIME: dict[str, str] = {
     ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
     ".mp3": "audio/mp3",
     ".wav": "audio/wav",
     ".m4a": "audio/mp4",

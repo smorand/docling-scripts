@@ -7,6 +7,7 @@ import typer
 
 from config import Settings
 from doc_convert.providers import (
+    DEFAULT_AUDIO_LLM,
     DEFAULT_DOCUMENT_ANALYSIS_LLM,
     DEFAULT_MEDIA_LLM,
     build_context_block,
@@ -87,6 +88,17 @@ def test_resolve_media_llm_default(google_settings: Settings) -> None:
 def test_resolve_media_llm_override(ibm_settings: Settings) -> None:
     provider, model, key = resolve_media_llm("ibm/claude-opus-4-8", ibm_settings)
     assert (provider, model, key) == ("ibm", "claude-opus-4-8", "ibm-key")
+
+
+def test_resolve_media_llm_audio_default_is_ibm(ibm_settings: Settings) -> None:
+    provider, model, key = resolve_media_llm(None, ibm_settings, media_type="audio")
+    assert (provider, key) == ("ibm", "ibm-key")
+    assert model == DEFAULT_AUDIO_LLM.split("/", 1)[1]
+
+
+def test_resolve_media_llm_video_default_is_google(google_settings: Settings) -> None:
+    provider, _, _ = resolve_media_llm(None, google_settings, media_type="video")
+    assert provider == "google"
 
 
 def test_resolve_document_analysis_llm_default(ibm_settings: Settings) -> None:

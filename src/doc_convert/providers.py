@@ -205,11 +205,17 @@ PROVIDER_URLS: dict[str, str] = {
 
 SUPPORTED_PROVIDERS: tuple[str, ...] = ("google", "openrouter", "ibm")
 
-# Default uses google/ (Gemini Files API: upload → generate), which has no
+# Video default uses google/ (Gemini Files API: upload → generate), which has no
 # payload size limit. Inline-base64 providers (ibm/, openrouter/) fail with 502
-# on large audio/video recordings. gemini-3-pro-preview was retired on the Google
-# API ("no longer available"); gemini-3.1-pro-preview is its current successor.
+# on large video. gemini-3-pro-preview was retired on the Google API ("no longer
+# available"); gemini-3.1-pro-preview is its current successor.
 DEFAULT_MEDIA_LLM = "google/gemini-3.1-pro-preview"
+
+# Audio defaults to ibm/ (IBM ICA fronts Gemini): audio is normalised to mono
+# 16 kHz ogg and split when needed (see audio_prep) so it always fits the inline
+# payload limit, letting transcription run on the single IBM credential without
+# GOOGLE_API_KEY.
+DEFAULT_AUDIO_LLM = "ibm/gemini-3.1-pro-preview"
 
 # Default model for the `--analyze` text-only analysis pass on documents.
 # Picked for reasoning quality on long markdown context. Document analysis only
@@ -272,9 +278,15 @@ def require_api_key(provider: str, settings: Settings) -> str:
     raise typer.Exit(1)
 
 
-def resolve_media_llm(llm: str | None, settings: Settings) -> tuple[str, str, str]:
-    """Resolve provider, model, and API key for audio/video processing."""
-    llm_spec = llm or DEFAULT_MEDIA_LLM
+def resolve_media_llm(llm: str | None, settings: Settings, *, media_type: str = "video") -> tuple[str, str, str]:
+    """Resolve provider, model, and API key for audio/video processing.
+
+    When ``llm`` is not given, the default depends on ``media_type``: audio uses
+    ``DEFAULT_AUDIO_LLM`` (ibm/, since audio is prepped to fit the inline limit),
+    video uses ``DEFAULT_MEDIA_LLM`` (google/, for the size-unlimited Files API).
+    """
+    default = DEFAULT_AUDIO_LLM if media_type == "audio" else DEFAULT_MEDIA_LLM
+    llm_spec = llm or default
     provider, model = parse_external_llm(llm_spec)
     api_key = require_api_key(provider, settings)
     return provider, model, api_key

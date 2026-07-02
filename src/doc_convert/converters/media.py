@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path  # noqa: TC003
+from typing import TYPE_CHECKING
 
 from doc_convert.base import BaseConverter, ConvertOptions
 from doc_convert.output import print_output_summary
+
+if TYPE_CHECKING:
+    from audio_prep import AudioPart
 
 logger = logging.getLogger(__name__)
 
@@ -70,20 +74,13 @@ class MediaConverter(BaseConverter):
 
     def convert(self) -> None:
         from doc_convert.providers import get_provider_url, resolve_media_llm  # noqa: PLC0415
-        from media_llm import process_media  # noqa: PLC0415
-        from tracing import trace_span  # noqa: PLC0415
 
         self.ensure_output_dir()
-        provider, model, api_key = resolve_media_llm(self.llm, self.options.settings)
+        provider, model, api_key = resolve_media_llm(self.llm, self.options.settings, media_type=self.media_type)
         url = get_provider_url(provider, self.options.settings) if provider != "google" else None
 
         if self.media_type == "audio":
-            from audio import build_transcription_prompt  # noqa: PLC0415
-
-            prompt, system = build_transcription_prompt(self.meeting)
-            span_name = "audio.transcribe"
-            with trace_span(span_name, file=self.source.name, provider=provider):
-                md = process_media(self.source, provider, model, prompt, api_key, system_prompt=system, url=url)
+            md = self._transcribe_audio(provider, model, api_key, url)
             md = self._assemble_audio_sections(md)
         else:
             md = self._extract_video_content(provider, model, api_key, url)
@@ -93,6 +90,72 @@ class MediaConverter(BaseConverter):
             md = f"# {title}\n\n{md}"
         self.write_document_md(md)
         print_output_summary(self.output_dir)
+
+    def _transcribe_audio(self, provider: str, model: str, api_key: str, url: str | None) -> str:
+        """Transcribe audio, normalising to mono 16 kHz ogg and splitting if oversized.
+
+        google/ has no payload limit (Files API), so it never splits; inline
+        providers (ibm/, openrouter/) split past ``SIZE_LIMIT_MB``.
+        """
+        from audio import build_transcription_prompt  # noqa: PLC0415
+        from audio_prep import SIZE_LIMIT_MB, prepare_audio  # noqa: PLC0415
+        from media_llm import process_media  # noqa: PLC0415
+        from tracing import trace_span  # noqa: PLC0415
+
+        prompt, system = build_transcription_prompt(self.meeting)
+        limit = SIZE_LIMIT_MB if provider != "google" else float("inf")
+        parts = prepare_audio(self.source, self.output_dir, size_limit_mb=limit)
+
+        if len(parts) == 1:
+            with trace_span("audio.transcribe", file=self.source.name, provider=provider):
+                return process_media(parts[0].path, provider, model, prompt, api_key, system_prompt=system, url=url)
+        return self._transcribe_audio_parts(parts, provider, model, api_key, url, prompt, system)
+
+    def _transcribe_audio_parts(
+        self,
+        parts: list[AudioPart],
+        provider: str,
+        model: str,
+        api_key: str,
+        url: str | None,
+        prompt: str,
+        base_system: str | None,
+    ) -> str:
+        """Transcribe each overlapping part, carrying speaker context across seams."""
+        from media_llm import process_media  # noqa: PLC0415
+        from tracing import trace_span  # noqa: PLC0415
+        from video import format_timestamp  # noqa: PLC0415
+
+        transcripts: list[tuple[AudioPart, str]] = []
+        prev_tail = ""
+        for part in parts:
+            system = base_system or ""
+            if prev_tail:
+                system = (
+                    f"{system}\n\nCONTINUITY: this is part {part.index + 1} of a recording split into "
+                    f'{len(parts)} parts. The previous part ended with:\n"""\n{prev_tail}\n"""\n'
+                    "Its first ~1 minute overlaps the previous part; transcribe that overlap in full "
+                    "anyway. Keep speaker names/labels consistent with the previous part."
+                )
+            with trace_span("audio.transcribe.part", file=part.path.name, provider=provider, part=part.index + 1):
+                logger.info("Transcribing part %d/%d", part.index + 1, len(parts))
+                text = process_media(part.path, provider, model, prompt, api_key, system_prompt=system, url=url)
+            transcripts.append((part, text.strip()))
+            prev_tail = text.strip()[-800:]
+
+        note = (
+            f"> **Note:** this recording was split into {len(parts)} parts to fit the transcription "
+            "model's input limit. Consecutive parts share a one-minute overlap, so speech near a seam "
+            "appears in both parts."
+        )
+        out: list[str] = [note, ""]
+        for part, text in transcripts:
+            out.append(
+                f"## Part {part.index + 1} of {len(parts)} "
+                f"({format_timestamp(part.start_s)} to {format_timestamp(part.end_s)})"
+            )
+            out.extend(["", text, ""])
+        return "\n".join(out).rstrip() + "\n"
 
     def _extract_video_content(self, provider: str, model: str, api_key: str, url: str | None) -> str:
         """Run video extraction, chunking the source past CHUNK_THRESHOLD_SECONDS."""
@@ -172,6 +235,43 @@ class MediaConverter(BaseConverter):
             )
             resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]  # type: ignore[no-any-return]
+
+    def _analyze_audio(
+        self,
+        provider: str,
+        model: str,
+        api_key: str,
+        url: str | None,
+        a_prompt: str,
+        a_system: str | None,
+        attachments: list[Path] | None,
+    ) -> str:
+        """Resend the normalised audio for analysis; fall back to text if it was split.
+
+        A recording long enough to need splitting can't be resent as one payload,
+        so we analyse the already self-sufficient ``document.md`` transcript text.
+        """
+        from audio_prep import SIZE_LIMIT_MB, prepare_audio  # noqa: PLC0415
+        from media_llm import process_media  # noqa: PLC0415
+
+        limit = SIZE_LIMIT_MB if provider != "google" else float("inf")
+        parts = prepare_audio(self.source, self.output_dir, size_limit_mb=limit)
+        if len(parts) == 1:
+            return process_media(
+                parts[0].path,
+                provider,
+                model,
+                a_prompt,
+                api_key,
+                system_prompt=a_system,
+                url=url,
+                attachments=attachments or None,
+            )
+        logger.info("Audio was split; analysing document.md transcript text instead of resending audio")
+        transcript = (self.output_dir / "document.md").read_text()
+        return self._text_completion(
+            provider, model, api_key, a_system or a_prompt, f"{a_prompt}\n\nFull transcript:\n\n{transcript}"
+        )
 
     def _assemble_audio_sections(self, transcription_md: str) -> str:
         """Append Additional Context, Screenshots and Additional Documents sections.
@@ -260,7 +360,7 @@ class MediaConverter(BaseConverter):
         if not (self.output_dir / "document.md").exists():
             return False
 
-        provider, model, api_key = resolve_media_llm(llm, self.options.settings)
+        provider, model, api_key = resolve_media_llm(llm, self.options.settings, media_type=self.media_type)
         url = get_provider_url(provider, self.options.settings) if provider != "google" else None
         meeting_ctx = meeting or self.meeting
 
@@ -297,16 +397,19 @@ class MediaConverter(BaseConverter):
             )
 
         with trace_span(f"{self.media_type}.analyze", file=self.source.name, provider=provider):
-            analysis_md = process_media(
-                self.source,
-                provider,
-                model,
-                a_prompt,
-                api_key,
-                system_prompt=a_system,
-                url=url,
-                attachments=attachments or None,
-            )
+            if self.media_type == "audio":
+                analysis_md = self._analyze_audio(provider, model, api_key, url, a_prompt, a_system, attachments)
+            else:
+                analysis_md = process_media(
+                    self.source,
+                    provider,
+                    model,
+                    a_prompt,
+                    api_key,
+                    system_prompt=a_system,
+                    url=url,
+                    attachments=attachments or None,
+                )
         title = _short_meeting_title(meeting_ctx)
         if title:
             analysis_md = f"# {title}\n\n{analysis_md}"

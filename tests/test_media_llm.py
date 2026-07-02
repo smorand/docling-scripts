@@ -29,6 +29,8 @@ def test_get_image_mime() -> None:
 def test_is_audio_ext() -> None:
     assert is_audio_ext(".ogg")
     assert is_audio_ext(".MP3")
+    assert is_audio_ext(".opus")
+    assert is_audio_ext(".OPUS")
     assert not is_audio_ext(".mp4")
 
 
