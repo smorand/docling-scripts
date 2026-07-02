@@ -32,7 +32,9 @@ from tracing import trace_span
 
 logger = logging.getLogger(__name__)
 
-NOTE_MODEL = "google/gemini-2.5-flash"
+# IBM ICA (which fronts Gemini) so note extraction needs no separate
+# GOOGLE_API_KEY; gemini-3.5-flash is the current flash tier on ICA.
+NOTE_MODEL = "ibm/gemini-3.5-flash"
 
 NOTE_SYSTEM_PROMPT = """\
 You are a note organizer. Given a document analysis and the list of available \

@@ -120,7 +120,6 @@ def main(
         show_default=(
             "same as --llm if set, "
             "else ibm/claude-haiku-4-5 if IBM ICA is configured, "
-            "else google/gemini-3.1-flash-lite-preview if GOOGLE_API_KEY is set, "
             "else smolvlm"
         ),
     ),

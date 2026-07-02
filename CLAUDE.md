@@ -28,9 +28,9 @@ doc-convert meeting.ogg --meeting-summary                      # Audio only: HTM
 
 - `--llm <provider/model>` — remote model identity (captions, document analysis, `--engine llm`, and as fallback for media when `--media-llm` is not set).
 - `--media-llm <provider/model>` — overrides the LLM used for audio/video conversion + media analysis only. Precedence: `--media-llm` > `--llm` > `google/gemini-3.1-pro-preview` (Files API default; required for big recordings).
-- `--captions <off|preset|provider/model>` — figure captioner. Defaults to `--llm` if set, else first cloud with creds from `AUTO_CAPTIONS_PREFERENCES` (today: `ibm/claude-haiku-4-5` → `google/gemini-3.1-flash-lite-preview`), else local `smolvlm`.
+- `--captions <off|preset|provider/model>` — figure captioner. Defaults to `--llm` if set, else first cloud with creds from `AUTO_CAPTIONS_PREFERENCES` (today: `ibm/claude-haiku-4-5`), else local `smolvlm`. The auto-path is IBM-only (single credential); it no longer falls back to a `google/` model.
 - `--engine local|llm` — PDF/image body parser. `local` (default for PDF) uses Docling; `llm` rasterizes pages to `--llm`. Images always `llm`.
-- `--ocr-model <off|local|provider/model>` — OCR engine for the `--engine local` PDF pipeline (the per-region text-from-bitmap stage; only fires on scanned/image content). Default = cloud LLM `DEFAULT_OCR_MODEL` (`google/gemini-3.1-pro-preview`, via `ocr_llm.LlmOcrModel`); since OCR only fires on bitmap regions, born-digital PDFs cost nothing. `local` = Tesseract CLI (system binary; `tesseract-lang` packs needed for non-eng). Does NOT auto-inherit `--llm` (the OCR model is chosen by this axis alone). `--no-ocr` is an alias for `off`. Note: for fully-scanned docs `--engine llm` (whole-page) usually beats LLM OCR (which reads one region-blob at a time).
+- `--ocr-model <off|local|provider/model>` — OCR engine for the `--engine local` PDF pipeline (the per-region text-from-bitmap stage; only fires on scanned/image content). Default = cloud LLM `DEFAULT_OCR_MODEL` (`ibm/gemini-3.1-pro-preview`, via `ocr_llm.LlmOcrModel`; IBM ICA fronts Gemini so no separate `GOOGLE_API_KEY`, and per-region crops go inline so the missing Files API on `ibm/` is irrelevant); since OCR only fires on bitmap regions, born-digital PDFs cost nothing. `local` = Tesseract CLI (system binary; `tesseract-lang` packs needed for non-eng). Does NOT auto-inherit `--llm` (the OCR model is chosen by this axis alone). `--no-ocr` is an alias for `off`. Note: for fully-scanned docs `--engine llm` (whole-page) usually beats LLM OCR (which reads one region-blob at a time).
 
 ## Project Structure
 
@@ -74,7 +74,7 @@ src/
 - Config: pydantic-settings (not os.environ)
 - Logging: Rich + logging module (not print)
 - Conversion paths:
-  - PDF `--engine local` (default): Docling layout + OCR + tables; figures captioned via `BaseConverter.describe_figures` (honors `--captions`). OCR engine selected by `--ocr-model` (default cloud LLM `google/gemini-3.1-pro-preview` via `ocr_llm.LlmOcrModel`; or `local` Tesseract CLI). Docling's flaky "auto" OCR is bypassed: we always set an explicit `ocr_options`.
+  - PDF `--engine local` (default): Docling layout + OCR + tables; figures captioned via `BaseConverter.describe_figures` (honors `--captions`). OCR engine selected by `--ocr-model` (default cloud LLM `ibm/gemini-3.1-pro-preview` via `ocr_llm.LlmOcrModel`; or `local` Tesseract CLI). Docling's flaky "auto" OCR is bypassed: we always set an explicit `ocr_options`.
   - PDF `--engine llm`: rasterize each page → `--llm` (whole page markdown). Same code path as Image.
   - Image: always `--engine llm` (requires `--llm`). If the model returns empty markdown (e.g. an unavailable/retired model such as the old `gemini-3-pro-preview`, which the Google API 404s while docling still reports `SUCCESS`), `ImageConverter.convert` fails loudly with `typer.Exit(1)` instead of writing a 0-byte `document.md`. Re-run with `-vv` to see the API response.
   - DOCX / PPTX: native XML / python-pptx for body, `describe_figures` for picture captions.

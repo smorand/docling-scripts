@@ -60,11 +60,10 @@ PRESET_REPO_IDS: dict[str, str] = {
 
 # Preferred cloud captioner when neither --captions nor --llm is given.
 # Tried in order; first one with credentials in env is used. Falls back to
-# the local smolvlm preset if none has credentials.
-AUTO_CAPTIONS_PREFERENCES: tuple[str, ...] = (
-    "ibm/claude-haiku-4-5",
-    "google/gemini-3.1-flash-lite-preview",
-)
+# the local smolvlm preset if none has credentials. IBM ICA is the single
+# credential we consolidate on (it also fronts Google's Gemini models), so the
+# auto-path stays on ibm/ and never requires a separate GOOGLE_API_KEY.
+AUTO_CAPTIONS_PREFERENCES: tuple[str, ...] = ("ibm/claude-haiku-4-5",)
 
 
 @dataclass(frozen=True)
@@ -97,8 +96,10 @@ LOCAL_OCR_ENGINES: tuple[str, ...] = ("tesseract",)
 DEFAULT_OCR_ENGINE = "tesseract"
 # Default OCR model when --ocr-model is omitted: a cloud LLM reads scanned/image
 # regions. OCR only fires on bitmap content, so born-digital PDFs cost nothing.
-# Use --ocr-model local for the offline Tesseract CLI engine instead.
-DEFAULT_OCR_MODEL = "google/gemini-3.1-pro-preview"
+# Uses IBM ICA (which fronts Gemini) so the default needs no separate
+# GOOGLE_API_KEY. Small per-region crops go inline, so the lack of a Files API
+# on ibm/ is irrelevant here. Use --ocr-model local for the offline Tesseract CLI.
+DEFAULT_OCR_MODEL = "ibm/gemini-3.1-pro-preview"
 
 
 @dataclass(frozen=True)
@@ -192,9 +193,8 @@ def resolve_captions(value: str | None, llm: str | None, settings: Settings) -> 
         1. Explicit --captions value (any form).
         2. --llm <provider/model> → captions go to that same model.
         3. First cloud preference in AUTO_CAPTIONS_PREFERENCES with creds in env.
-           Today that means ibm/claude-haiku-4-5 if IBM ICA is configured,
-           otherwise google/gemini-3.1-flash-lite-preview if GOOGLE_API_KEY is set.
-        4. Local default preset (smolvlm).
+           Today that means ibm/claude-haiku-4-5 if IBM ICA is configured.
+        4. Local default preset (smolvlm) when no cloud creds are present.
     """
     from doc_convert.providers import parse_external_llm  # noqa: PLC0415
 
