@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
 import typer
@@ -79,9 +80,13 @@ def _download_enrichments() -> None:
 
 @app.command()
 def main(
-    document: str = typer.Argument(
+    documents: list[str] | None = typer.Argument(
         None,
-        help="File path or URL. Required unless --start-audio or --download-models is used.",
+        help=(
+            "One or more file paths or URLs. Multiple inputs are converted independently "
+            "(each in its own subprocess); add -P to run them in parallel. "
+            "Required unless --start-audio or --download-models is used."
+        ),
     ),
     output: str | None = typer.Option(
         None,
@@ -262,6 +267,17 @@ def main(
         ),
         show_default="off",
     ),
+    parallel: int = typer.Option(
+        1,
+        "-P",
+        "--parallel",
+        min=0,
+        help=(
+            "Convert multiple input files concurrently with N worker subprocesses "
+            "(0 = one per CPU core; bare -P also means all cores). Ignored for a single file."
+        ),
+        show_default="1 (sequential)",
+    ),
     verbose: int = typer.Option(
         0,
         "-v",
@@ -293,12 +309,28 @@ def main(
     Record:           doc-convert --start-audio "Meeting Name"
     Models:           doc-convert --download-models [--captions qwen]
     """
-    setup_logging(verbose=verbose, quiet=quiet, source_path=document)
+    docs = documents or []
+    first_doc = docs[0] if docs else None
+    setup_logging(verbose=verbose, quiet=quiet, source_path=first_doc)
     _install_signal_handlers()
 
     effective_prompt = analyze_prompt or instructions
     if instructions and not analyze_prompt:
         console.print("[yellow]--instructions is deprecated; use --analyze-prompt instead.[/yellow]")
+
+    # ── Multi-file batch: one subprocess per input ───────────────────────
+    if len(docs) > 1:
+        _guard_batch_compatible(
+            start_audio=start_audio,
+            download_models=download_models,
+            download_enrichments=download_enrichments,
+            output=output,
+        )
+        from doc_convert.batch import run_batch  # noqa: PLC0415
+
+        raise typer.Exit(run_batch(docs, parallel))
+
+    document = first_doc
     try:
         _dispatch(
             document=document,
@@ -332,6 +364,37 @@ def main(
         raise typer.Exit(130) from None
     finally:
         _cleanup_outputs()
+
+
+def _guard_batch_compatible(
+    *,
+    start_audio: bool,
+    download_models: bool,
+    download_enrichments: bool,
+    output: str | None,
+) -> None:
+    """Reject option combinations that make no sense for multiple input files."""
+    if start_audio:
+        console.print("[red]--start-audio records a single session; pass one name, not several files.[/red]")
+        raise typer.Exit(1)
+    if download_models or download_enrichments:
+        console.print("[red]--download-models / --download-enrichments take no input files.[/red]")
+        raise typer.Exit(1)
+    if output:
+        console.print("[red]-o/--output targets a single directory; omit it when converting multiple files.[/red]")
+        raise typer.Exit(1)
+
+
+def run() -> None:
+    """Console entry point: normalize argv, then hand off to Typer.
+
+    Typer cannot express an option whose value is optional, so a bare
+    ``-P``/``--parallel`` is rewritten to ``-P 0`` (all cores) before parsing.
+    """
+    from doc_convert.batch import normalize_parallel_argv  # noqa: PLC0415
+
+    sys.argv[1:] = normalize_parallel_argv(sys.argv[1:])
+    app()
 
 
 def _dispatch(  # noqa: PLR0912, PLR0915

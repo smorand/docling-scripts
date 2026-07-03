@@ -34,6 +34,30 @@ All conversions write to a `<name>_docling/` directory with `document.md` as the
 - `--engine local|llm` — PDF/image body extraction. `local` (default) uses Docling layout + OCR + tables. `llm` rasterizes each page and sends it to `--llm` (whole document is described by the model). Images always use `llm`.
 - `--ocr-model <value>` — OCR engine for the `--engine local` PDF pipeline. OCR is the per-region "text from bitmap" stage; it only fires on scanned/image content, so born-digital PDFs are unaffected (and incur no LLM cost even with the LLM default). Value is `off` (alias for `--no-ocr`), `local` (Tesseract CLI via the system `tesseract` binary), or a `provider/model` slug to read each image region with a cloud LLM. **Default: `ibm/gemini-3.1-pro-preview`** (IBM ICA fronts Gemini, so no separate `GOOGLE_API_KEY` is needed; per-region crops go inline, so the missing Files API on `ibm/` is irrelevant here). Unlike `--captions`, it does **not** auto-inherit `--llm`. For fully-scanned documents prefer `--engine llm` (reads whole pages); LLM OCR shines on mostly-digital docs with small embedded image-text. The `local` engine needs the `tesseract` binary, plus language packs (`brew install tesseract-lang`) for anything beyond the bundled `eng`.
 
+### Batch (multiple files)
+
+Pass more than one file (shell globs work) and each is converted independently, in its own `doc-convert` subprocess. Subprocess isolation means one failed file never aborts the batch, and there is no shared torch/MPS or model-load contention.
+
+```bash
+# Sequential (default): each file streamed live, one after another
+doc-convert *.ogg
+
+# Parallel: -P N runs N files at a time
+doc-convert *.ogg -P 4
+
+# Bare -P (or -P 0) uses one worker per CPU core
+doc-convert *.pdf -P
+
+# Any per-file flags apply to every file
+doc-convert *.ogg -P 4 --analyze --lang fr
+```
+
+- `-P/--parallel N` — number of files converted concurrently. `1` (default) is sequential; `0` or a bare `-P` means all cores. Ignored for a single file.
+- Parallel mode (`-P >1`) captures each file's output and prints it as a block when that file finishes, followed by a summary (`N ok, M failed`). Sequential mode streams output live.
+- Exit code is `0` only if every file succeeded, else `1`. Ctrl+C stops the batch; each child cleans up its own partial output.
+- Not combinable with `--start-audio`, `--download-models`, `--download-enrichments`, or `-o/--output` (all single-target modes).
+- Per-file caching still applies: re-running a batch skips files already converted (use `-f` to force).
+
 ### PDF
 
 ```bash

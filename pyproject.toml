@@ -38,7 +38,7 @@ dev = [
 ]
 
 [project.scripts]
-doc-convert = "doc_convert:app"
+doc-convert = "doc_convert:run"
 
 [build-system]
 requires = ["hatchling"]

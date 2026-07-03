@@ -22,7 +22,12 @@ doc-convert email.msg                                          # Outlook MSG (vi
 doc-convert --start-audio "Meeting Name"                       # Record + transcribe (+ companion sections)
 doc-convert video.mp4 --analyze                                # Extract + summarize
 doc-convert meeting.ogg --meeting-summary                      # Audio only: HTML brief opened in browser
+doc-convert *.ogg -P 4                                         # Batch: N files at a time (subprocess per file)
 ```
+
+### Multi-file batch (`-P/--parallel`)
+
+`document` is variadic (`documents: list[str]`). Passing >1 file routes to `doc_convert/batch.py:run_batch`, which converts **each file in its own `doc-convert` subprocess** (via `sys.argv[0]`, reusing the parent's flags with file tokens and `--parallel` stripped). Subprocess isolation is deliberate: `output_guard` is global/main-thread-only state and the PDF pipeline is torch/MPS, so threads would be unsafe. `-P N` = N concurrent workers; `0` or a bare `-P` = all cores (`os.cpu_count()`); `1` (default) = sequential with live streaming. Parallel mode captures per-file output, prints blocks + a summary; exit code `1` if any file failed. Bare `-P` (no value) is impossible in Typer, so `run()` (the console entry point, replacing `app`) normalises `sys.argv` (`-P` → `-P 0`) before Typer parses. A single file takes the unchanged in-process path (zero regression). Guards reject `-o`, `--start-audio`, `--download-models`, `--download-enrichments` with >1 file.
 
 ### Flag surface (4 axes)
 
