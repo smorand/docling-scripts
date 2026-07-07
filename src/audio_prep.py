@@ -8,8 +8,12 @@ raw audio (measured against IBM ICA: 79 MB base64 OK, 133 MB -> 502, 200 MB ->
    ~14 MB/h). Opus is far more compact than Vorbis at equal speech quality and
    is available in every ffmpeg build here (libvorbis is not). This shrinks
    mp3/opus/m4a/wav down enough that any recording up to ~3.5 h fits one request.
-2. Split the (rare) still-oversized recording into equal parts with a one-minute
-   overlap, so no word is lost at a seam and speaker labels can be carried over.
+2. Split the recording into equal parts with a one-minute overlap when it is
+   still too large OR too long. Inline providers sit behind a gateway that aborts
+   a request after ~10 minutes (Cloudflare 524), and transcribing a long
+   recording exceeds that even when the file is small (a 2 h mono Opus recording
+   is only ~20 MB), so parts are capped by DURATION as well as size. No word is
+   lost at a seam and speaker labels can be carried over.
 
 Kept separate from ``audio.py`` (which owns recording + prompts) so the size
 handling can be unit-tested without touching the recording path.
@@ -27,6 +31,13 @@ logger = logging.getLogger(__name__)
 
 # Stay comfortably under the measured ~56 MB raw / ~75 MB base64 inline ceiling.
 SIZE_LIMIT_MB = 50
+# Inline providers (IBM ICA, OpenRouter) sit behind a gateway that aborts a
+# request with a 524/504 timeout after ~10 minutes. Transcribing a long
+# recording in one shot exceeds that even when the file is small (a 2 h mono
+# Opus recording is only ~20 MB but takes far longer than 10 min to transcribe),
+# so we also cap each request by DURATION. 30 min of speech transcribes well
+# under the gateway ceiling; google/ (Files API) has no such limit.
+DURATION_LIMIT_SECONDS = 30 * 60
 # One-minute overlap between consecutive parts (words at a hard cut survive in
 # the neighbouring part; also gives the model context to keep speakers stable).
 OVERLAP_SECONDS = 60
@@ -114,17 +125,24 @@ def plan_parts(
     size_mb: float,
     *,
     limit_mb: float = SIZE_LIMIT_MB,
+    duration_limit_s: float = DURATION_LIMIT_SECONDS,
     overlap_s: float = OVERLAP_SECONDS,
 ) -> list[tuple[float, float]]:
     """Return ``(start, end)`` spans covering the recording, or ``[]`` if it fits.
 
-    Splits into ``ceil(size / limit)`` equal parts; every part after the first
-    starts ``overlap_s`` earlier than its slice, giving a fixed overlap between
-    consecutive parts.
+    Splits into enough equal parts to satisfy BOTH ceilings: the base64 payload
+    size (``limit_mb``) and the per-request duration (``duration_limit_s``, which
+    keeps each transcription under the inline provider's gateway timeout). Every
+    part after the first starts ``overlap_s`` earlier than its slice, giving a
+    fixed overlap between consecutive parts.
     """
-    if duration_s <= 0 or size_mb <= limit_mb:
+    if duration_s <= 0:
         return []
-    n = math.ceil(size_mb / limit_mb)
+    n_size = math.ceil(size_mb / limit_mb) if size_mb > limit_mb else 1
+    n_dur = math.ceil(duration_s / duration_limit_s) if duration_s > duration_limit_s else 1
+    n = max(n_size, n_dur)
+    if n <= 1:
+        return []
     seg = duration_s / n
     spans: list[tuple[float, float]] = []
     for i in range(n):
@@ -139,13 +157,16 @@ def prepare_audio(
     work_dir: Path,
     *,
     size_limit_mb: float = SIZE_LIMIT_MB,
+    duration_limit_s: float = DURATION_LIMIT_SECONDS,
     overlap_s: float = OVERLAP_SECONDS,
 ) -> list[AudioPart]:
     """Normalise ``source`` under ``work_dir`` and split it if still oversized.
 
     Writes ``work_dir/audio.ogg`` (the normalised recording) and, when a split
     is needed, ``work_dir/parts/part_NN.ogg``. Returns an ordered list of
-    ``AudioPart`` (length 1 when the whole recording fits one request).
+    ``AudioPart`` (length 1 when the whole recording fits one request). A part is
+    emitted per ``size_limit_mb`` of payload AND per ``duration_limit_s`` of
+    audio, whichever demands more parts.
     """
     work_dir.mkdir(parents=True, exist_ok=True)
     normalized = work_dir / "audio.ogg"
@@ -157,7 +178,9 @@ def prepare_audio(
 
     size_mb = normalized.stat().st_size / (1024 * 1024)
     duration = audio_duration_seconds(normalized) or 0.0
-    spans = plan_parts(duration, size_mb, limit_mb=size_limit_mb, overlap_s=overlap_s)
+    spans = plan_parts(
+        duration, size_mb, limit_mb=size_limit_mb, duration_limit_s=duration_limit_s, overlap_s=overlap_s
+    )
     if not spans:
         return [AudioPart(normalized, 0, 0.0, duration)]
 

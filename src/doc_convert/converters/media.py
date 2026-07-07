@@ -98,13 +98,15 @@ class MediaConverter(BaseConverter):
         providers (ibm/, openrouter/) split past ``SIZE_LIMIT_MB``.
         """
         from audio import build_transcription_prompt  # noqa: PLC0415
-        from audio_prep import SIZE_LIMIT_MB, prepare_audio  # noqa: PLC0415
+        from audio_prep import DURATION_LIMIT_SECONDS, SIZE_LIMIT_MB, prepare_audio  # noqa: PLC0415
         from media_llm import process_media  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415
 
         prompt, system = build_transcription_prompt(self.meeting)
-        limit = SIZE_LIMIT_MB if provider != "google" else float("inf")
-        parts = prepare_audio(self.source, self.output_dir, size_limit_mb=limit)
+        inline = provider != "google"
+        limit = SIZE_LIMIT_MB if inline else float("inf")
+        dur_limit = DURATION_LIMIT_SECONDS if inline else float("inf")
+        parts = prepare_audio(self.source, self.output_dir, size_limit_mb=limit, duration_limit_s=dur_limit)
 
         if len(parts) == 1:
             with trace_span("audio.transcribe", file=self.source.name, provider=provider):
@@ -251,11 +253,13 @@ class MediaConverter(BaseConverter):
         A recording long enough to need splitting can't be resent as one payload,
         so we analyse the already self-sufficient ``document.md`` transcript text.
         """
-        from audio_prep import SIZE_LIMIT_MB, prepare_audio  # noqa: PLC0415
+        from audio_prep import DURATION_LIMIT_SECONDS, SIZE_LIMIT_MB, prepare_audio  # noqa: PLC0415
         from media_llm import process_media  # noqa: PLC0415
 
-        limit = SIZE_LIMIT_MB if provider != "google" else float("inf")
-        parts = prepare_audio(self.source, self.output_dir, size_limit_mb=limit)
+        inline = provider != "google"
+        limit = SIZE_LIMIT_MB if inline else float("inf")
+        dur_limit = DURATION_LIMIT_SECONDS if inline else float("inf")
+        parts = prepare_audio(self.source, self.output_dir, size_limit_mb=limit, duration_limit_s=dur_limit)
         if len(parts) == 1:
             return process_media(
                 parts[0].path,

@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# Gateway/proxy timeout statuses seen from inline providers when a single media
+# request runs past their ~10-minute request ceiling (Cloudflare 524, plus the
+# standard 502/504/522/408 variants gateways emit for the same condition).
+_GATEWAY_TIMEOUT_CODES = frozenset({408, 504, 522, 524})
+
 # ── MIME types ───────────────────────────────────────────────────────────────
 
 IMAGE_MIME: dict[str, str] = {
@@ -361,6 +366,22 @@ def process_media_openrouter(
                         f"File too large for {provider_label} ({size_mb:.0f} MB as base64 payload).\n"
                         "Inline media providers have payload size limits.\n\n"
                         "Use the google/ provider instead (uploads via Files API, no size limit):\n"
+                        f"  doc-convert {file_path.name} --llm google/gemini-3.1-pro-preview\n"
+                        "  (requires GOOGLE_API_KEY env var)"
+                    )
+                    raise RuntimeError(msg)
+                if resp.status_code in _GATEWAY_TIMEOUT_CODES:
+                    logger.error(
+                        "%s returned %d: gateway timeout. The media chunk took too long to process.",
+                        provider_label,
+                        resp.status_code,
+                    )
+                    msg = (
+                        f"{provider_label} gateway timed out ({resp.status_code}) processing "
+                        f"{file_path.name}.\nThe request exceeded the provider's ~10-minute ceiling. "
+                        "This normally means a very long recording; doc-convert splits audio by "
+                        "duration to avoid it, so if you hit this, the media is unusually dense.\n\n"
+                        "Use the google/ provider instead (Files API, no gateway timeout):\n"
                         f"  doc-convert {file_path.name} --llm google/gemini-3.1-pro-preview\n"
                         "  (requires GOOGLE_API_KEY env var)"
                     )

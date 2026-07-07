@@ -4,24 +4,56 @@ from __future__ import annotations
 
 from itertools import pairwise
 
-from audio_prep import OVERLAP_SECONDS, SIZE_LIMIT_MB, plan_parts
+from audio_prep import DURATION_LIMIT_SECONDS, OVERLAP_SECONDS, SIZE_LIMIT_MB, plan_parts
+
+# A duration comfortably under the ceiling, used when only size should drive splits.
+_SHORT = 600.0
 
 
 def test_plan_parts_no_split_when_under_limit() -> None:
-    assert plan_parts(3600, SIZE_LIMIT_MB - 10, limit_mb=SIZE_LIMIT_MB) == []
+    assert plan_parts(_SHORT, SIZE_LIMIT_MB - 10, limit_mb=SIZE_LIMIT_MB) == []
 
 
 def test_plan_parts_no_split_at_exactly_limit() -> None:
-    assert plan_parts(3600, SIZE_LIMIT_MB, limit_mb=SIZE_LIMIT_MB) == []
+    assert plan_parts(_SHORT, SIZE_LIMIT_MB, limit_mb=SIZE_LIMIT_MB) == []
 
 
 def test_plan_parts_no_split_zero_duration() -> None:
     assert plan_parts(0, 999, limit_mb=SIZE_LIMIT_MB) == []
 
 
+def test_plan_parts_splits_on_duration_even_when_small() -> None:
+    # The 524 bug: the real 2h05 recording is only ~20 MB (well under the size
+    # limit) but must still split because it exceeds the per-request duration
+    # ceiling. 7498 s / 1800 s -> ceil = 5 parts.
+    spans = plan_parts(7498, 20, limit_mb=SIZE_LIMIT_MB)
+    assert len(spans) == 5
+    assert spans[0][0] == 0.0
+    assert spans[-1][1] == 7498
+    for prev, nxt in pairwise(spans):
+        assert nxt[0] < prev[1]  # overlap, no coverage gap
+
+
+def test_plan_parts_no_split_under_duration_ceiling() -> None:
+    assert plan_parts(DURATION_LIMIT_SECONDS, 10, limit_mb=SIZE_LIMIT_MB) == []
+
+
+def test_plan_parts_duration_ceiling_disabled_by_infinity() -> None:
+    # google/ passes inf: a long-but-small recording stays a single part.
+    assert plan_parts(4 * 60 * 60, 20, limit_mb=float("inf"), duration_limit_s=float("inf")) == []
+
+
+def test_plan_parts_uses_max_of_size_and_duration() -> None:
+    # 160 MB -> 4 parts by size; 7498 s -> 5 parts by duration (30 min ceiling).
+    # The larger count wins.
+    spans = plan_parts(7498, 160, limit_mb=50)
+    assert len(spans) == 5
+
+
 def test_plan_parts_two_parts_with_overlap() -> None:
-    # 80 MB / 50 MB limit -> ceil = 2 parts, seg = 3600 s each.
-    spans = plan_parts(7200, 80, limit_mb=50, overlap_s=60)
+    # 80 MB / 50 MB limit -> ceil = 2 parts, seg = 3600 s each. Duration ceiling
+    # disabled to isolate the size-driven split.
+    spans = plan_parts(7200, 80, limit_mb=50, duration_limit_s=float("inf"), overlap_s=60)
     assert len(spans) == 2
     (s0, e0), (s1, e1) = spans
     assert s0 == 0.0
@@ -32,7 +64,8 @@ def test_plan_parts_two_parts_with_overlap() -> None:
 
 
 def test_plan_parts_covers_full_duration_and_overlaps() -> None:
-    spans = plan_parts(10000, 160, limit_mb=50, overlap_s=OVERLAP_SECONDS)  # ceil(160/50) = 4
+    # ceil(160/50) = 4; duration ceiling disabled to isolate the size-driven split.
+    spans = plan_parts(10000, 160, limit_mb=50, duration_limit_s=float("inf"), overlap_s=OVERLAP_SECONDS)
     assert len(spans) == 4
     assert spans[0][0] == 0.0
     assert spans[-1][1] == 10000
