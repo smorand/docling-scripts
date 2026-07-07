@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from itertools import pairwise
 
-from audio_prep import DURATION_LIMIT_SECONDS, OVERLAP_SECONDS, SIZE_LIMIT_MB, plan_parts
+from audio_prep import (
+    DURATION_LIMIT_SECONDS,
+    GOOGLE_DURATION_LIMIT_SECONDS,
+    OVERLAP_SECONDS,
+    SIZE_LIMIT_MB,
+    plan_parts,
+)
 
 # A duration comfortably under the ceiling, used when only size should drive splits.
 _SHORT = 600.0
@@ -25,8 +31,8 @@ def test_plan_parts_no_split_zero_duration() -> None:
 def test_plan_parts_splits_on_duration_even_when_small() -> None:
     # The 524 bug: the real 2h05 recording is only ~20 MB (well under the size
     # limit) but must still split because it exceeds the per-request duration
-    # ceiling. 7498 s / 1800 s -> ceil = 5 parts.
-    spans = plan_parts(7498, 20, limit_mb=SIZE_LIMIT_MB)
+    # ceiling. 7498 s / 1800 s -> ceil = 5 parts (explicit ceiling to pin math).
+    spans = plan_parts(7498, 20, limit_mb=SIZE_LIMIT_MB, duration_limit_s=1800)
     assert len(spans) == 5
     assert spans[0][0] == 0.0
     assert spans[-1][1] == 7498
@@ -38,15 +44,28 @@ def test_plan_parts_no_split_under_duration_ceiling() -> None:
     assert plan_parts(DURATION_LIMIT_SECONDS, 10, limit_mb=SIZE_LIMIT_MB) == []
 
 
-def test_plan_parts_duration_ceiling_disabled_by_infinity() -> None:
-    # google/ passes inf: a long-but-small recording stays a single part.
-    assert plan_parts(4 * 60 * 60, 20, limit_mb=float("inf"), duration_limit_s=float("inf")) == []
+def test_plan_parts_default_ceiling_keeps_parts_within_limit() -> None:
+    # With the production default, every part span stays within the ceiling: the
+    # ReadTimeout bug came from ~29 min parts, so no part may exceed the ceiling.
+    spans = plan_parts(7498, 18, limit_mb=SIZE_LIMIT_MB)
+    assert spans  # a 2 h recording splits
+    for start, end in spans:
+        assert end - start <= DURATION_LIMIT_SECONDS + 1  # +1 for float rounding
+
+
+def test_plan_parts_google_ceiling_still_splits_long_audio() -> None:
+    # google/ has no gateway, but the model malforms on a huge single shot, so a
+    # 2 h recording must still split under the (looser) google ceiling.
+    spans = plan_parts(7498, 18, limit_mb=float("inf"), duration_limit_s=GOOGLE_DURATION_LIMIT_SECONDS)
+    assert len(spans) == 5  # ceil(7498 / 1800)
+    for start, end in spans:
+        assert end - start <= GOOGLE_DURATION_LIMIT_SECONDS + 1
 
 
 def test_plan_parts_uses_max_of_size_and_duration() -> None:
-    # 160 MB -> 4 parts by size; 7498 s -> 5 parts by duration (30 min ceiling).
+    # 160 MB -> 4 parts by size; 7498 s / 1800 s -> 5 parts by duration.
     # The larger count wins.
-    spans = plan_parts(7498, 160, limit_mb=50)
+    spans = plan_parts(7498, 160, limit_mb=50, duration_limit_s=1800)
     assert len(spans) == 5
 
 

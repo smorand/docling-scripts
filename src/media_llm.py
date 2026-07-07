@@ -23,10 +23,141 @@ logger = logging.getLogger(__name__)
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# Read timeout for a single Gemini generateContent call. Long because a dense
+# chunk can take several minutes to transcribe (google/ has no gateway cap).
+_GEMINI_GENERATE_TIMEOUT = 30 * 60.0
+# Gemini can return an empty MALFORMED_RESPONSE candidate; retry a few times.
+_GEMINI_MAX_ATTEMPTS = 3
+
 # Gateway/proxy timeout statuses seen from inline providers when a single media
 # request runs past their ~10-minute request ceiling (Cloudflare 524, plus the
-# standard 502/504/522/408 variants gateways emit for the same condition).
+# standard 504/522/408 variants gateways emit for the same condition).
 _GATEWAY_TIMEOUT_CODES = frozenset({408, 504, 522, 524})
+
+# Transient upstream failures. IBM ICA's gateway intermittently returns a flaky
+# 502 Bad Gateway / 503 / 429 (and the timeout codes) that succeed on retry;
+# these are NOT payload problems. A 502 on a small part is transient, not "too
+# large" (part 1 of a recording succeeds, part 2 of the same size 502s, then
+# retries fine). We retry these with exponential backoff before failing.
+_RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 520, 522, 524})
+_MAX_MEDIA_ATTEMPTS = 4
+_RETRY_BACKOFF_SECONDS = (5.0, 15.0, 45.0)
+# A raw payload above this genuinely exceeds the inline base64 ceiling (~75 MB
+# base64 ≈ ~56 MB raw, measured against IBM ICA). A 502/413 here really IS "too
+# large" and retrying cannot help, so we fail fast and point at google/.
+_INLINE_TOO_LARGE_MB = 60.0
+
+
+def _too_large_message(provider_label: str, file_name: str, size_mb: float) -> str:
+    return (
+        f"File too large for {provider_label} ({size_mb:.0f} MB raw payload).\n"
+        "Inline media providers have payload size limits.\n\n"
+        "Use the google/ provider instead (uploads via Files API, no size limit):\n"
+        f"  doc-convert {file_name} --llm google/gemini-3.1-pro-preview\n"
+        "  (requires GOOGLE_API_KEY env var)"
+    )
+
+
+def _gateway_timeout_message(provider_label: str, file_name: str) -> str:
+    return (
+        f"{provider_label} gateway timed out processing {file_name} after "
+        f"{_MAX_MEDIA_ATTEMPTS} attempts.\nThe request exceeded the provider's "
+        "~10-minute ceiling. doc-convert already splits audio by duration to "
+        "avoid this, so a persistent timeout means unusually dense media.\n\n"
+        "Use the google/ provider instead (Files API, no gateway timeout):\n"
+        f"  doc-convert {file_name} --llm google/gemini-3.1-pro-preview\n"
+        "  (requires GOOGLE_API_KEY env var)"
+    )
+
+
+def _transient_gateway_message(provider_label: str, file_name: str) -> str:
+    return (
+        f"{provider_label} kept returning a transient gateway error for {file_name} "
+        f"after {_MAX_MEDIA_ATTEMPTS} attempts.\nThis is an upstream flake, not a "
+        "payload problem. Re-run to retry, or use the google/ provider (different "
+        "transport):\n"
+        f"  doc-convert {file_name} --llm google/gemini-3.1-pro-preview\n"
+        "  (requires GOOGLE_API_KEY env var)"
+    )
+
+
+def _send_media_request(
+    client: httpx.Client,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    *,
+    provider_label: str,
+    file_name: str,
+    raw_size_mb: float,
+) -> httpx.Response:
+    """POST a media request, retrying transient gateway failures with backoff.
+
+    Returns the successful response, or raises ``RuntimeError`` with an
+    actionable message once retries are exhausted (or immediately for a genuine
+    payload-too-large, which retrying cannot fix).
+    """
+    resp: httpx.Response | None = None
+    for attempt in range(1, _MAX_MEDIA_ATTEMPTS + 1):
+        # A slow/hung gateway raises an httpx exception (ReadTimeout, ConnectError,
+        # RemoteProtocolError, ...) instead of an HTTP status. IBM ICA does this for
+        # a request that runs long: it holds the socket open sending nothing until
+        # our read timeout fires. Treat these exactly like a retryable transient.
+        try:
+            resp = client.post(url, headers=headers, json=body)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            if attempt < _MAX_MEDIA_ATTEMPTS:
+                wait = _RETRY_BACKOFF_SECONDS[min(attempt - 1, len(_RETRY_BACKOFF_SECONDS) - 1)]
+                logger.warning(
+                    "%s request failed (%s, attempt %d/%d); retrying in %.0fs",
+                    provider_label,
+                    type(exc).__name__,
+                    attempt,
+                    _MAX_MEDIA_ATTEMPTS,
+                    wait,
+                )
+                time.sleep(wait)
+                continue
+            logger.error("%s request failed (%s) after %d attempts", provider_label, type(exc).__name__, attempt)
+            raise RuntimeError(_gateway_timeout_message(provider_label, file_name)) from exc
+        if resp.is_success:
+            return resp
+        status = resp.status_code
+        # Genuine payload-too-large (413 always; 502 only when the raw payload is
+        # near/over the inline ceiling): retrying cannot help, fail straight over.
+        if status == 413 or (status == 502 and raw_size_mb > _INLINE_TOO_LARGE_MB):  # noqa: PLR2004
+            logger.error("%s returned %d: payload too large (%.1f MB raw)", provider_label, status, raw_size_mb)
+            raise RuntimeError(_too_large_message(provider_label, file_name, raw_size_mb))
+        if status in _RETRYABLE_STATUS and attempt < _MAX_MEDIA_ATTEMPTS:
+            wait = _RETRY_BACKOFF_SECONDS[min(attempt - 1, len(_RETRY_BACKOFF_SECONDS) - 1)]
+            logger.warning(
+                "%s returned %d (transient, attempt %d/%d); retrying in %.0fs",
+                provider_label,
+                status,
+                attempt,
+                _MAX_MEDIA_ATTEMPTS,
+                wait,
+            )
+            time.sleep(wait)
+            continue
+        break
+
+    # Retries exhausted, or a non-retryable status on the first try.
+    if resp is None:  # pragma: no cover - the loop always runs at least once
+        msg = f"{provider_label} produced no response"
+        raise RuntimeError(msg)
+    status = resp.status_code
+    if status in _GATEWAY_TIMEOUT_CODES:
+        logger.error("%s returned %d: gateway timeout after %d attempts", provider_label, status, _MAX_MEDIA_ATTEMPTS)
+        raise RuntimeError(_gateway_timeout_message(provider_label, file_name))
+    if status == 502:  # noqa: PLR2004
+        logger.error("%s returned 502 after %d attempts (transient)", provider_label, _MAX_MEDIA_ATTEMPTS)
+        raise RuntimeError(_transient_gateway_message(provider_label, file_name))
+    logger.error("%s error %d: %s", provider_label, status, resp.text[:500])
+    resp.raise_for_status()
+    msg = f"{provider_label} request failed with status {status}"  # defensive: raise_for_status already threw
+    raise RuntimeError(msg)
+
 
 # ── MIME types ───────────────────────────────────────────────────────────────
 
@@ -181,34 +312,50 @@ def _gemini_generate(
     if system_prompt:
         body["systemInstruction"] = {"parts": [{"text": system_prompt}]}
 
-    with httpx.Client(timeout=600.0) as client:
-        resp = client.post(
-            f"{GEMINI_API_BASE}/v1beta/models/{model}:generateContent",
-            headers={
-                "x-goog-api-key": api_key,
-                "Content-Type": "application/json",
-            },
-            json=body,
+    url = f"{GEMINI_API_BASE}/v1beta/models/{model}:generateContent"
+    headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+
+    # Gemini occasionally returns finishReason=MALFORMED_RESPONSE with an empty
+    # candidate (seen on very large single-shot transcriptions); it is sometimes
+    # transient, so retry a couple of times before giving up. A genuinely oversized
+    # request keeps malforming, which is why long audio is chunked upstream.
+    last_finish = "unknown"
+    for attempt in range(1, _GEMINI_MAX_ATTEMPTS + 1):
+        # Generous read timeout: unlike IBM ICA (hard ~10-min gateway cap), Google
+        # has no proxy cutting the connection, so a long transcription just needs
+        # us to wait for the buffered response.
+        with httpx.Client(timeout=httpx.Timeout(_GEMINI_GENERATE_TIMEOUT, connect=30.0)) as client:
+            resp = client.post(url, headers=headers, json=body)
+            resp.raise_for_status()
+
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            reason = data.get("promptFeedback", {}).get("blockReason", "unknown")
+            logger.error("Gemini returned no candidates. Block reason: %s. Response: %s", reason, str(data)[:500])
+            msg = f"Gemini returned no candidates (block reason: {reason})"
+            raise RuntimeError(msg)
+
+        parts_out = candidates[0].get("content", {}).get("parts", [])
+        if parts_out:
+            return cast("str", parts_out[0].get("text", ""))
+
+        last_finish = candidates[0].get("finishReason", "unknown")
+        logger.warning(
+            "Gemini candidate has no parts (finish reason: %s, attempt %d/%d)",
+            last_finish,
+            attempt,
+            _GEMINI_MAX_ATTEMPTS,
         )
-        resp.raise_for_status()
+        if attempt < _GEMINI_MAX_ATTEMPTS:
+            time.sleep(_RETRY_BACKOFF_SECONDS[min(attempt - 1, len(_RETRY_BACKOFF_SECONDS) - 1)])
 
-    data = resp.json()
-    candidates = data.get("candidates", [])
-    if not candidates:
-        reason = data.get("promptFeedback", {}).get("blockReason", "unknown")
-        logger.error("Gemini returned no candidates. Block reason: %s. Response: %s", reason, str(data)[:500])
-        msg = f"Gemini returned no candidates (block reason: {reason})"
-        raise RuntimeError(msg)
-
-    content = candidates[0].get("content", {})
-    parts = content.get("parts", [])
-    if not parts:
-        finish = candidates[0].get("finishReason", "unknown")
-        logger.error("Gemini candidate has no parts. Finish reason: %s. Response: %s", finish, str(data)[:500])
-        msg = f"Gemini candidate has no content parts (finish reason: {finish})"
-        raise RuntimeError(msg)
-
-    return cast("str", parts[0].get("text", ""))
+    logger.error("Gemini produced no content after %d attempts (finish reason: %s)", _GEMINI_MAX_ATTEMPTS, last_finish)
+    msg = (
+        f"Gemini produced no content (finish reason: {last_finish}). For a long recording this means the "
+        "single-shot transcription was too large; doc-convert chunks long audio to avoid it."
+    )
+    raise RuntimeError(msg)
 
 
 def _gemini_delete(file_name: str, api_key: str) -> None:
@@ -342,53 +489,22 @@ def process_media_openrouter(
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": content_parts})
 
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    body = {"model": model, "messages": messages}
+    raw_size_mb = file_path.stat().st_size / (1024 * 1024)
+
     with trace_span(f"{provider_label}.generate", model=model, media_type="audio" if is_audio else "video"):
         logger.info("Sending %s to %s (%s, %s)", file_path.name, provider_label, model, mime_type)
         with httpx.Client(timeout=600.0) as client:
-            resp = client.post(
+            resp = _send_media_request(
+                client,
                 url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={"model": model, "messages": messages},
+                headers,
+                body,
+                provider_label=provider_label,
+                file_name=file_path.name,
+                raw_size_mb=raw_size_mb,
             )
-            if not resp.is_success:
-                if resp.status_code == 502:  # noqa: PLR2004
-                    size_mb = file_path.stat().st_size / (1024 * 1024)
-                    logger.error(
-                        "%s returned 502: file too large (%.1f MB as base64). "
-                        "Use google/ provider with Files API instead.",
-                        provider_label,
-                        size_mb,
-                    )
-                    msg = (
-                        f"File too large for {provider_label} ({size_mb:.0f} MB as base64 payload).\n"
-                        "Inline media providers have payload size limits.\n\n"
-                        "Use the google/ provider instead (uploads via Files API, no size limit):\n"
-                        f"  doc-convert {file_path.name} --llm google/gemini-3.1-pro-preview\n"
-                        "  (requires GOOGLE_API_KEY env var)"
-                    )
-                    raise RuntimeError(msg)
-                if resp.status_code in _GATEWAY_TIMEOUT_CODES:
-                    logger.error(
-                        "%s returned %d: gateway timeout. The media chunk took too long to process.",
-                        provider_label,
-                        resp.status_code,
-                    )
-                    msg = (
-                        f"{provider_label} gateway timed out ({resp.status_code}) processing "
-                        f"{file_path.name}.\nThe request exceeded the provider's ~10-minute ceiling. "
-                        "This normally means a very long recording; doc-convert splits audio by "
-                        "duration to avoid it, so if you hit this, the media is unusually dense.\n\n"
-                        "Use the google/ provider instead (Files API, no gateway timeout):\n"
-                        f"  doc-convert {file_path.name} --llm google/gemini-3.1-pro-preview\n"
-                        "  (requires GOOGLE_API_KEY env var)"
-                    )
-                    raise RuntimeError(msg)
-                error_body = resp.text[:500]
-                logger.error("%s error %d: %s", provider_label, resp.status_code, error_body)
-                resp.raise_for_status()
 
     return cast("str", resp.json()["choices"][0]["message"]["content"])
 

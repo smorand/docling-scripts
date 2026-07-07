@@ -98,14 +98,22 @@ class MediaConverter(BaseConverter):
         providers (ibm/, openrouter/) split past ``SIZE_LIMIT_MB``.
         """
         from audio import build_transcription_prompt  # noqa: PLC0415
-        from audio_prep import DURATION_LIMIT_SECONDS, SIZE_LIMIT_MB, prepare_audio  # noqa: PLC0415
+        from audio_prep import (  # noqa: PLC0415
+            DURATION_LIMIT_SECONDS,
+            GOOGLE_DURATION_LIMIT_SECONDS,
+            SIZE_LIMIT_MB,
+            prepare_audio,
+        )
         from media_llm import process_media  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415
 
         prompt, system = build_transcription_prompt(self.meeting)
         inline = provider != "google"
+        # Both providers split long audio: inline by size (base64 ceiling) + a tight
+        # duration cap (10-min gateway); google by a looser duration cap only (no
+        # gateway, but the model malforms on a huge single-shot transcription).
         limit = SIZE_LIMIT_MB if inline else float("inf")
-        dur_limit = DURATION_LIMIT_SECONDS if inline else float("inf")
+        dur_limit = DURATION_LIMIT_SECONDS if inline else GOOGLE_DURATION_LIMIT_SECONDS
         parts = prepare_audio(self.source, self.output_dir, size_limit_mb=limit, duration_limit_s=dur_limit)
 
         if len(parts) == 1:
@@ -253,12 +261,17 @@ class MediaConverter(BaseConverter):
         A recording long enough to need splitting can't be resent as one payload,
         so we analyse the already self-sufficient ``document.md`` transcript text.
         """
-        from audio_prep import DURATION_LIMIT_SECONDS, SIZE_LIMIT_MB, prepare_audio  # noqa: PLC0415
+        from audio_prep import (  # noqa: PLC0415
+            DURATION_LIMIT_SECONDS,
+            GOOGLE_DURATION_LIMIT_SECONDS,
+            SIZE_LIMIT_MB,
+            prepare_audio,
+        )
         from media_llm import process_media  # noqa: PLC0415
 
         inline = provider != "google"
         limit = SIZE_LIMIT_MB if inline else float("inf")
-        dur_limit = DURATION_LIMIT_SECONDS if inline else float("inf")
+        dur_limit = DURATION_LIMIT_SECONDS if inline else GOOGLE_DURATION_LIMIT_SECONDS
         parts = prepare_audio(self.source, self.output_dir, size_limit_mb=limit, duration_limit_s=dur_limit)
         if len(parts) == 1:
             return process_media(

@@ -31,13 +31,19 @@ logger = logging.getLogger(__name__)
 
 # Stay comfortably under the measured ~56 MB raw / ~75 MB base64 inline ceiling.
 SIZE_LIMIT_MB = 50
-# Inline providers (IBM ICA, OpenRouter) sit behind a gateway that aborts a
-# request with a 524/504 timeout after ~10 minutes. Transcribing a long
-# recording in one shot exceeds that even when the file is small (a 2 h mono
-# Opus recording is only ~20 MB but takes far longer than 10 min to transcribe),
-# so we also cap each request by DURATION. 30 min of speech transcribes well
-# under the gateway ceiling; google/ (Files API) has no such limit.
-DURATION_LIMIT_SECONDS = 30 * 60
+# Inline providers (IBM ICA, OpenRouter) sit behind a gateway that aborts a long
+# request, either with a 524/504 status or by hanging until the client read
+# timeout fires (~10 min). Transcribing a long recording in one shot exceeds that
+# even when the file is small (a 2 h mono Opus recording is only ~20 MB but takes
+# far longer to transcribe), so we also cap each request by DURATION. Measured:
+# 25 min parts transcribe reliably, 29 min parts intermittently hang, so we keep
+# a safe 20 min ceiling.
+DURATION_LIMIT_SECONDS = 20 * 60
+# google/ has no gateway cap, but the model still can't verbatim-transcribe a
+# huge single shot: a whole 2 h recording (~137k audio tokens) comes back as an
+# empty MALFORMED_RESPONSE. So google also splits by duration, just with a larger
+# ceiling (no 10-min gateway to respect, only the model's single-call limit).
+GOOGLE_DURATION_LIMIT_SECONDS = 30 * 60
 # One-minute overlap between consecutive parts (words at a hard cut survive in
 # the neighbouring part; also gives the model context to keep speakers stable).
 OVERLAP_SECONDS = 60
