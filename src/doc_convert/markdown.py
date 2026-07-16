@@ -234,7 +234,66 @@ def _format_description_block(description: str, mention: str) -> str:
     return "\n".join(lines)
 
 
-def build_document_markdown(  # noqa: PLR0912, PLR0915
+def _render_item_lines(
+    item: object,
+    doc: object,
+    ref: str,
+    artifacts: FloatingArtifacts,
+    contexts: dict[str, FloatingContext],
+    *,
+    heading_offset: int = 1,
+) -> list[str]:
+    """Render one docling item (table, figure, or text) as markdown lines.
+
+    ``heading_offset`` shifts section-header levels so they nest correctly
+    under whatever heading structure the caller already emitted (e.g. PPTX
+    per-slide grouping nests two levels deeper than the flat PDF/DOCX output).
+    """
+    lines: list[str] = []
+    if isinstance(item, TableItem):
+        ctx = contexts.get(ref, FloatingContext())
+        lines.append(_heading_for(ctx.label, "Table", ctx.caption))
+        lines.append("")
+        try:
+            table_md = item.export_to_markdown(doc=doc).strip()  # type: ignore[arg-type]
+        except Exception:
+            logger.warning("Failed to serialise table %s", ref)
+            table_md = ""
+        if table_md:
+            lines.append(table_md)
+            lines.append("")
+        block = _format_description_block(artifacts.table_descriptions.get(ref, ""), ctx.mention)
+        if block:
+            lines.append(block)
+            lines.append("")
+    elif isinstance(item, PictureItem):
+        ctx = contexts.get(ref, FloatingContext())
+        lines.append(_heading_for(ctx.label, "Figure", ctx.caption))
+        lines.append("")
+        block = _format_description_block(artifacts.figure_descriptions.get(ref, ""), ctx.mention)
+        if block:
+            lines.append(block)
+            lines.append("")
+        fig_path = artifacts.figure_paths.get(ref, "")
+        if fig_path:
+            lines.append(f"*Image: [`{fig_path}`]({fig_path})*")
+            lines.append("")
+    else:
+        text = getattr(item, "text", None)
+        if text:
+            label = getattr(item, "label", "")
+            if "section_header" in str(label).lower():
+                level = getattr(item, "level", 1)
+                prefix = "#" * min(level + heading_offset, 6)
+                lines.append(f"{prefix} {text}\n")
+            elif "list_item" in str(label).lower():
+                lines.append(f"- {text}")
+            else:
+                lines.append(f"{text}\n")
+    return lines
+
+
+def build_document_markdown(
     doc: object,
     artifacts: FloatingArtifacts,
     contexts: dict[str, FloatingContext] | None = None,
@@ -274,46 +333,71 @@ def build_document_markdown(  # noqa: PLR0912, PLR0915
                 current_page = page_no
 
         ref = getattr(item, "self_ref", "")
-        if isinstance(item, TableItem):
-            ctx = contexts.get(ref, FloatingContext())
-            lines.append(_heading_for(ctx.label, "Table", ctx.caption))
-            lines.append("")
-            try:
-                table_md = item.export_to_markdown(doc=doc).strip()  # type: ignore[arg-type]
-            except Exception:
-                logger.warning("Failed to serialise table %s", ref)
-                table_md = ""
-            if table_md:
-                lines.append(table_md)
-                lines.append("")
-            block = _format_description_block(artifacts.table_descriptions.get(ref, ""), ctx.mention)
-            if block:
-                lines.append(block)
-                lines.append("")
-        elif isinstance(item, PictureItem):
-            ctx = contexts.get(ref, FloatingContext())
-            lines.append(_heading_for(ctx.label, "Figure", ctx.caption))
-            lines.append("")
-            block = _format_description_block(artifacts.figure_descriptions.get(ref, ""), ctx.mention)
-            if block:
-                lines.append(block)
-                lines.append("")
-            fig_path = artifacts.figure_paths.get(ref, "")
-            if fig_path:
-                lines.append(f"*Image: [`{fig_path}`]({fig_path})*")
-                lines.append("")
+        lines.extend(_render_item_lines(item, doc, ref, artifacts, contexts))
+
+    return "\n".join(lines)
+
+
+def build_pptx_slides_markdown(
+    doc: object,
+    artifacts: FloatingArtifacts,
+    contexts: dict[str, FloatingContext] | None,
+    *,
+    visual_by_slide: dict[int, str],
+    notes_by_slide: dict[int, str],
+    slide_count: int,
+    title: str = "",
+    hidden_slides: set[int] | None = None,
+) -> str:
+    """Build ``document.md`` for PPTX with 3 sections per slide.
+
+    Each slide gets: (1) extracted text + figures (native docling parse,
+    same as other converters), (2) a full-slide screenshot interpretation
+    from a vision LLM, (3) speaker notes when present. This lets a
+    downstream LLM tell "mechanically extracted content" apart from
+    "what a vision model saw on the rendered slide".
+
+    ``hidden_slides`` marks slide numbers hidden in the source PowerPoint
+    (still fully processed, just annotated so a reader knows it would not
+    appear in an actual presentation).
+    """
+    hidden_slides = hidden_slides or set()
+    contexts = contexts or {}
+    lines: list[str] = []
+    if title:
+        lines.append(f"# {title}\n")
+
+    items_by_slide: dict[int, list[tuple[str, object]]] = {}
+    for item, _ in doc.iterate_items():  # type: ignore[attr-defined]
+        prov = getattr(item, "prov", None)
+        slide_no = prov[0].page_no if prov else 0
+        items_by_slide.setdefault(slide_no, []).append((getattr(item, "self_ref", ""), item))
+
+    max_slide = max([slide_count, *items_by_slide.keys(), *visual_by_slide.keys()], default=0)
+
+    for slide_no in range(1, max_slide + 1):
+        suffix = " *(hidden in source presentation)*" if slide_no in hidden_slides else ""
+        lines.append(f"## Slide {slide_no}{suffix}\n")
+
+        lines.append("### Extracted Content (text + figures)\n")
+        slide_items = items_by_slide.get(slide_no, [])
+        if slide_items:
+            for ref, item in slide_items:
+                lines.extend(_render_item_lines(item, doc, ref, artifacts, contexts, heading_offset=3))
         else:
-            text = getattr(item, "text", None)
-            if text:
-                label = getattr(item, "label", "")
-                if "section_header" in str(label).lower():
-                    level = getattr(item, "level", 1)
-                    prefix = "#" * min(level + 1, 6)
-                    lines.append(f"{prefix} {text}\n")
-                elif "list_item" in str(label).lower():
-                    lines.append(f"- {text}")
-                else:
-                    lines.append(f"{text}\n")
+            lines.append("_No extractable text content on this slide._")
+        lines.append("")
+
+        lines.append("### Visual Interpretation (full slide screenshot)\n")
+        visual = visual_by_slide.get(slide_no, "").strip()
+        lines.append(visual if visual else "_No visual interpretation available._")
+        lines.append("")
+
+        lines.append("### Speaker Notes\n")
+        notes = notes_by_slide.get(slide_no, "").strip()
+        lines.append(notes if notes else "_No speaker notes._")
+        lines.append("")
+        lines.append("---\n")
 
     return "\n".join(lines)
 

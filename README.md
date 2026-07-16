@@ -100,16 +100,14 @@ doc-convert document.pdf --cpu
 doc-convert document.pdf --all
 ```
 
-### DOCX / PPTX
+### DOCX
 
 ```bash
 # Native XML parse + figure captions (auto-routes to Gemini Flash Lite if GOOGLE_API_KEY is set)
 doc-convert deck.docx
-doc-convert slides.pptx
 
 # Explicit external captioner
 doc-convert deck.docx --llm openrouter/anthropic/claude-haiku-4.5
-doc-convert slides.pptx --llm ibm/gemini-3.1-pro-preview
 
 # Local captioner only, ignore any env auto-routing
 doc-convert deck.docx --captions qwen
@@ -118,6 +116,50 @@ doc-convert deck.docx --captions qwen
 doc-convert deck.docx --no-figures
 doc-convert deck.docx --captions off
 ```
+
+### PPTX
+
+By default, PPTX conversion does more than a native text parse: **every slide
+is also rendered as a real screenshot and visually interpreted by a vision
+LLM**, because a slide's meaning often lives in its layout, diagrams, and
+schemas, not just its raw text runs. `document.md` groups the output **per
+slide**, each with 3 clearly labelled subsections so a downstream LLM can
+tell them apart:
+
+1. **Extracted Content (text + figures)** — the mechanical docling +
+   python-pptx parse (same as DOCX): text runs, tables, and extracted
+   embedded images with their VLM figure captions.
+2. **Visual Interpretation (full slide screenshot)** — a detailed
+   interpretation of the slide exactly as it renders (layout, visual
+   hierarchy, what any chart/diagram/schema actually shows), produced by a
+   vision LLM from a full-slide screenshot. This is independent from step 1;
+   the two are not merged, so you can compare "what was extracted" against
+   "what the slide looks like".
+3. **Speaker Notes** — the presenter notes attached to the slide (if any).
+
+Slide screenshots are rendered faithfully via headless LibreOffice
+(`pptx → pdf`) then rasterized page-by-page, landing in `<output>/slides/`.
+
+```bash
+# Default: native text/figures + whole-slide screenshot interpretation (ibm/claude-sonnet-4-6)
+doc-convert slides.pptx
+
+# Different vision model for the slide screenshot pass
+doc-convert slides.pptx --slide-vlm openrouter/anthropic/claude-haiku-4.5
+
+# Figure captioner still configurable independently (step 1 only)
+doc-convert slides.pptx --llm ibm/gemini-3.1-pro-preview
+doc-convert slides.pptx --captions qwen
+
+# Faster/cheaper: skip the screenshot pass entirely (flat document.md, like DOCX)
+doc-convert slides.pptx --no-slide-screenshots
+
+# Text only, no figures, no screenshots
+doc-convert slides.pptx --no-figures --no-slide-screenshots
+```
+
+Requires the `soffice` (LibreOffice) binary for rendering; see System
+Dependencies below.
 
 ### XLSX
 
@@ -208,6 +250,7 @@ doc-convert invoice.pdf --note --note-force
 ├── document.md             # Main file (always present, self-contained)
 ├── images.md               # Image catalog (PDF, DOCX, PPTX)
 ├── figures/                # Extracted figures (PDF, DOCX, PPTX)
+├── slides/                 # Whole-slide screenshots (PPTX, default; slide_NNN.png)
 ├── tables/                 # Rendered tables fed to the captioner (PDF)
 ├── analyze.md              # Analysis (--analyze)
 ├── summary.html            # Meeting brief (--meeting-summary, audio only)
@@ -239,6 +282,7 @@ Audio is first normalised to a compact mono 16 kHz OGG Opus copy (~14 MB/h) and,
 | sox | `--start-audio` (recording) | `brew install sox` |
 | yt-dlp | YouTube URLs | `brew install yt-dlp` |
 | ffmpeg + ffprobe | Video > 30 min chunking | `brew install ffmpeg` |
+| soffice (LibreOffice) | PPTX slide screenshots (default; disable with `--no-slide-screenshots`) | `brew install libreoffice` |
 
 ## Environment Variables
 

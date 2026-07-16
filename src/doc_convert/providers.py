@@ -222,6 +222,11 @@ DEFAULT_AUDIO_LLM = "ibm/gemini-3.1-pro-preview"
 # sends text, so any provider works (no Files API constraint).
 DEFAULT_DOCUMENT_ANALYSIS_LLM = "ibm/claude-opus-4-8"
 
+# Default model for the PPTX whole-slide screenshot visual interpretation pass
+# (see pptx_slide_vlm.py). Confirmed available via IBM ICA's GET /models:
+# 'claude-sonnet-4-6' is listed alongside claude-sonnet-4-5/claude-opus-4-8.
+DEFAULT_PPTX_SLIDE_VLM = "ibm/claude-sonnet-4-6"
+
 
 def get_provider_url(provider: str, settings: Settings) -> str:
     """Return the OpenAI-compatible chat completions URL for a provider."""
@@ -298,3 +303,12 @@ def resolve_document_analysis_llm(llm: str | None, settings: Settings) -> tuple[
     provider, model = parse_external_llm(llm_spec)
     api_key = require_api_key(provider, settings)
     return provider, model, api_key
+
+
+def resolve_pptx_slide_llm(slide_vlm: str | None, llm: str | None) -> str:
+    """Resolve the provider/model slug for PPTX whole-slide screenshot analysis.
+
+    Precedence: --slide-vlm > --llm > DEFAULT_PPTX_SLIDE_VLM. This mirrors the
+    --media-llm > --llm > default pattern used for audio/video.
+    """
+    return slide_vlm or llm or DEFAULT_PPTX_SLIDE_VLM

@@ -78,6 +78,8 @@ class ConvertOptions:
     captions: CaptionsSpec = field(default_factory=lambda: CaptionsLocal(DEFAULT_LOCAL_PRESET))
     ocr: OcrSpec = field(default_factory=lambda: OcrLocal(DEFAULT_OCR_ENGINE))
     llm: str | None = None
+    slide_screenshots: bool = True
+    slide_vlm: str | None = None
     settings: Settings = field(default_factory=Settings)
 
     @property

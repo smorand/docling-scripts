@@ -12,6 +12,7 @@ from doc_convert.markdown import (
     FloatingContext,
     build_document_markdown,
     build_images_catalog,
+    build_pptx_slides_markdown,
     collect_floating_contexts,
     extract_title,
 )
@@ -143,7 +144,35 @@ class PptxConverter(BaseConverter):
             )
 
         title = extract_title(doc)
-        page_md = build_document_markdown(doc, artifacts, contexts, title=title, paginated=True)
+
+        slide_count = 0
+        visual_by_slide: dict[int, str] = {}
+        notes_by_slide: dict[int, str] = {}
+        if self.options.slide_screenshots:
+            from doc_convert.pptx_slide_vlm import build_slide_render_artifacts  # noqa: PLC0415
+            from doc_convert.providers import resolve_pptx_slide_llm  # noqa: PLC0415
+
+            slide_vlm = resolve_pptx_slide_llm(self.options.slide_vlm, self.options.llm)
+            with trace_span("pptx.slide_screenshots", file=self.source.name, llm=slide_vlm):
+                logger.info("Rendering slide screenshots and analyzing with %s", slide_vlm)
+                render_artifacts = build_slide_render_artifacts(
+                    self.source, self.output_dir, self.options.settings, llm=slide_vlm
+                )
+            slide_count = len(render_artifacts.image_paths_by_slide)
+            visual_by_slide = {n: a.description for n, a in render_artifacts.analyses_by_slide.items()}
+            notes_by_slide = render_artifacts.notes_by_slide
+            page_md = build_pptx_slides_markdown(
+                doc,
+                artifacts,
+                contexts,
+                visual_by_slide=visual_by_slide,
+                notes_by_slide=notes_by_slide,
+                slide_count=slide_count,
+                title=title,
+                hidden_slides=render_artifacts.hidden_slides,
+            )
+        else:
+            page_md = build_document_markdown(doc, artifacts, contexts, title=title, paginated=True)
         self.write_document_md(page_md)
 
         if fig_count > 0:
@@ -159,6 +188,7 @@ class PptxConverter(BaseConverter):
             fig_count=fig_count,
             captions_used=self.options.captions_enabled and fig_count > 0,
             desc_count=len(artifacts.figure_descriptions),
+            extra_files=(["slides/"] if slide_count > 0 else None),
         )
 
 

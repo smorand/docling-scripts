@@ -10,6 +10,7 @@ from doc_convert.providers import (
     DEFAULT_AUDIO_LLM,
     DEFAULT_DOCUMENT_ANALYSIS_LLM,
     DEFAULT_MEDIA_LLM,
+    DEFAULT_PPTX_SLIDE_VLM,
     build_context_block,
     get_caption_prompt,
     get_meeting_summary_prompt,
@@ -19,6 +20,7 @@ from doc_convert.providers import (
     require_api_key,
     resolve_document_analysis_llm,
     resolve_media_llm,
+    resolve_pptx_slide_llm,
 )
 
 
@@ -130,3 +132,21 @@ def test_prompt_getters_return_nonempty() -> None:
     assert get_table_prompt().strip()
     # meeting summary template embeds the CSS block
     assert "<style>" not in get_meeting_summary_prompt() or "body {" in get_meeting_summary_prompt()
+
+
+# ── --slide-vlm resolution (PPTX whole-slide screenshot analysis) ─────────
+
+
+def test_resolve_pptx_slide_llm_explicit_wins() -> None:
+    assert resolve_pptx_slide_llm("ibm/claude-opus-4-8", "google/gemini-3.1-pro-preview") == "ibm/claude-opus-4-8"
+
+
+def test_resolve_pptx_slide_llm_falls_back_to_llm() -> None:
+    assert (
+        resolve_pptx_slide_llm(None, "openrouter/anthropic/claude-haiku-4.5") == "openrouter/anthropic/claude-haiku-4.5"
+    )
+
+
+def test_resolve_pptx_slide_llm_default() -> None:
+    assert resolve_pptx_slide_llm(None, None) == DEFAULT_PPTX_SLIDE_VLM
+    assert DEFAULT_PPTX_SLIDE_VLM == "ibm/claude-sonnet-4-6"

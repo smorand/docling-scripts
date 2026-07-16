@@ -155,6 +155,24 @@ def main(
         help="Skip figure extraction (text + tables only, faster)",
         show_default="off (figures extracted)",
     ),
+    no_slide_screenshots: bool = typer.Option(
+        False,
+        "--no-slide-screenshots",
+        help=(
+            "PPTX only: skip the whole-slide screenshot + VLM visual interpretation pass "
+            "(faster, cheaper; falls back to a flat text+figures document.md)."
+        ),
+        show_default="off (slide screenshots enabled by default)",
+    ),
+    slide_vlm: str | None = typer.Option(
+        None,
+        "--slide-vlm",
+        help=(
+            "PPTX only: override the LLM used to visually interpret each rendered slide "
+            "screenshot. Precedence: --slide-vlm > --llm > default."
+        ),
+        show_default="ibm/claude-sonnet-4-6",
+    ),
     cpu: bool = typer.Option(
         False,
         "--cpu",
@@ -342,6 +360,8 @@ def main(
             no_ocr=no_ocr,
             ocr_model=ocr_model,
             no_figures=no_figures,
+            no_slide_screenshots=no_slide_screenshots,
+            slide_vlm=slide_vlm,
             cpu=cpu,
             all_formats=all_formats,
             start_audio=start_audio,
@@ -408,6 +428,8 @@ def _dispatch(  # noqa: PLR0912, PLR0915
     no_ocr: bool,
     ocr_model: str | None,
     no_figures: bool,
+    no_slide_screenshots: bool,
+    slide_vlm: str | None,
     cpu: bool,
     all_formats: bool,
     start_audio: bool,
@@ -647,6 +669,8 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             engine=engine,
             captions=captions_spec,
             llm=llm,
+            slide_screenshots=not no_slide_screenshots,
+            slide_vlm=slide_vlm,
             settings=settings,
         )
 
