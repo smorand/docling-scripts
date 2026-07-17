@@ -227,6 +227,11 @@ DEFAULT_DOCUMENT_ANALYSIS_LLM = "ibm/claude-opus-4-8"
 # 'claude-sonnet-4-6' is listed alongside claude-sonnet-4-5/claude-opus-4-8.
 DEFAULT_PPTX_SLIDE_VLM = "ibm/claude-sonnet-4-6"
 
+# Default model for image conversion when the input itself is an image and the
+# user did not pass --llm. Images always go through the external VLM pipeline,
+# so we auto-fill a small IBM-hosted Claude model instead of hard-failing.
+DEFAULT_IMAGE_LLM = "ibm/claude-haiku-4-5"
+
 
 def get_provider_url(provider: str, settings: Settings) -> str:
     """Return the OpenAI-compatible chat completions URL for a provider."""
@@ -312,3 +317,11 @@ def resolve_pptx_slide_llm(slide_vlm: str | None, llm: str | None) -> str:
     --media-llm > --llm > default pattern used for audio/video.
     """
     return slide_vlm or llm or DEFAULT_PPTX_SLIDE_VLM
+
+
+def resolve_image_llm(llm: str | None) -> str:
+    """Resolve the provider/model slug for image conversion.
+
+    Precedence: explicit --llm > DEFAULT_IMAGE_LLM.
+    """
+    return llm or DEFAULT_IMAGE_LLM

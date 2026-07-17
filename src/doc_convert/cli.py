@@ -682,10 +682,22 @@ def _dispatch(  # noqa: PLR0912, PLR0915
 
         if fmt == InputFormat.IMAGE:
             from doc_convert.converters.image import ImageConverter  # noqa: PLC0415
+            from doc_convert.providers import resolve_image_llm  # noqa: PLC0415
 
-            if not llm:
-                console.print("[red]Image conversion requires --llm <provider/model>[/red]")
-                raise typer.Exit(1)
+            options = ConvertOptions(
+                output_dir=out_dir,
+                figures=not no_figures,
+                all_formats=all_formats,
+                do_ocr=not no_ocr,
+                ocr=resolve_ocr_model(ocr_model, no_ocr=no_ocr),
+                cpu=cpu,
+                engine=engine,
+                captions=captions_spec,
+                llm=resolve_image_llm(llm),
+                slide_screenshots=not no_slide_screenshots,
+                slide_vlm=slide_vlm,
+                settings=settings,
+            )
             converter = ImageConverter(doc_path, options)
         elif fmt == InputFormat.PDF and engine == Engine.LLM:
             from doc_convert.converters.image import ImageConverter  # noqa: PLC0415

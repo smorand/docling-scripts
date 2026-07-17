@@ -9,6 +9,7 @@ from config import Settings
 from doc_convert.providers import (
     DEFAULT_AUDIO_LLM,
     DEFAULT_DOCUMENT_ANALYSIS_LLM,
+    DEFAULT_IMAGE_LLM,
     DEFAULT_MEDIA_LLM,
     DEFAULT_PPTX_SLIDE_VLM,
     build_context_block,
@@ -19,6 +20,7 @@ from doc_convert.providers import (
     parse_external_llm,
     require_api_key,
     resolve_document_analysis_llm,
+    resolve_image_llm,
     resolve_media_llm,
     resolve_pptx_slide_llm,
 )
@@ -150,3 +152,12 @@ def test_resolve_pptx_slide_llm_falls_back_to_llm() -> None:
 def test_resolve_pptx_slide_llm_default() -> None:
     assert resolve_pptx_slide_llm(None, None) == DEFAULT_PPTX_SLIDE_VLM
     assert DEFAULT_PPTX_SLIDE_VLM == "ibm/claude-sonnet-4-6"
+
+
+def test_resolve_image_llm_uses_explicit_value() -> None:
+    assert resolve_image_llm("google/gemini-3.1-pro-preview") == "google/gemini-3.1-pro-preview"
+
+
+def test_resolve_image_llm_default() -> None:
+    assert resolve_image_llm(None) == DEFAULT_IMAGE_LLM
+    assert DEFAULT_IMAGE_LLM == "ibm/claude-haiku-4-5"

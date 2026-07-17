@@ -28,10 +28,10 @@ All conversions write to a `<name>_docling/` directory with `document.md` as the
 
 ### The flags that matter
 
-- `--llm <provider/model>` — remote model identity. Used for captions, document analysis, PDF/image `--engine llm`, and as fallback for media when `--media-llm` is not given.
+- `--llm <provider/model>` — remote model identity. Used for captions, document analysis, PDF/image `--engine llm`, and as fallback for media when `--media-llm` is not given. For image inputs only, if omitted, `doc-convert` now defaults to `ibm/claude-haiku-4-5`.
 - `--media-llm <provider/model>` — overrides the LLM used for audio/video conversion and media analysis only. Precedence: `--media-llm` > `--llm` > a per-type default. **Audio defaults to `ibm/gemini-3.1-pro-preview`**: audio is normalised to a compact mono 16 kHz OGG Opus copy and split with overlap when needed (see below), so it fits the inline payload limit and runs on the single IBM credential. **Video defaults to `google/gemini-3.1-pro-preview`**: it uploads via the Gemini Files API (no size limit), which large video needs since `ibm/` and `openrouter/` send inline base64.
 - `--captions <value>` — figure captioner. Value is `off`, a local preset (`smolvlm`, `granite_vision`, `pixtral`, `qwen`), or a `provider/model` slug. Defaults: same as `--llm` if set, else `ibm/claude-haiku-4-5` if `IBM_ICA_MODEL_KEY` + `IBM_ICA_BASE_URL` are configured, else local `smolvlm`.
-- `--engine local|llm` — PDF/image body extraction. `local` (default) uses Docling layout + OCR + tables. `llm` rasterizes each page and sends it to `--llm` (whole document is described by the model). Images always use `llm`.
+- `--engine local|llm` — PDF/image body extraction. `local` (default) uses Docling layout + OCR + tables. `llm` rasterizes each page and sends it to `--llm` (whole document is described by the model). Images always use `llm`, and now default to `ibm/claude-haiku-4-5` when `--llm` is omitted.
 - `--ocr-model <value>` — OCR engine for the `--engine local` PDF pipeline. OCR is the per-region "text from bitmap" stage; it only fires on scanned/image content, so born-digital PDFs are unaffected (and incur no LLM cost even with the LLM default). Value is `off` (alias for `--no-ocr`), `local` (Tesseract CLI via the system `tesseract` binary), or a `provider/model` slug to read each image region with a cloud LLM. **Default: `ibm/gemini-3.1-pro-preview`** (IBM ICA fronts Gemini, so no separate `GOOGLE_API_KEY` is needed; per-region crops go inline, so the missing Files API on `ibm/` is irrelevant here). Unlike `--captions`, it does **not** auto-inherit `--llm`. For fully-scanned documents prefer `--engine llm` (reads whole pages); LLM OCR shines on mostly-digital docs with small embedded image-text. The `local` engine needs the `tesseract` binary, plus language packs (`brew install tesseract-lang`) for anything beyond the bundled `eng`.
 
 ### Batch (multiple files)
@@ -170,8 +170,12 @@ doc-convert spreadsheet.xlsx
 ### Image (always engine=llm)
 
 ```bash
+doc-convert scan.png
+
 doc-convert scan.png --llm google/gemini-3.1-pro-preview
 ```
+
+If `--llm` is omitted for a direct image input, `doc-convert` now uses `ibm/claude-haiku-4-5` by default.
 
 ### Audio
 
