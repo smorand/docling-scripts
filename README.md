@@ -55,7 +55,7 @@ doc-convert *.ogg -P 4 --analyze --lang fr
 - `-P/--parallel N` — number of files converted concurrently. `1` (default) is sequential; `0` or a bare `-P` means all cores. Ignored for a single file.
 - Parallel mode (`-P >1`) captures each file's output and prints it as a block when that file finishes, followed by a summary (`N ok, M failed`). Sequential mode streams output live.
 - Exit code is `0` only if every file succeeded, else `1`. Ctrl+C stops the batch; each child cleans up its own partial output.
-- Not combinable with `--start-audio`, `--download-models`, `--download-enrichments`, or `-o/--output` (all single-target modes).
+- Not combinable with `--start-audio`, `--download-models`, `--download-enrichments`, `-o/--output`, or `--stdout` (all single-target modes).
 - Per-file caching still applies: re-running a batch skips files already converted (use `-f` to force).
 
 ### PDF
@@ -238,7 +238,13 @@ opening a converted email does not trigger any open-tracking beacon.
 doc-convert document.pdf                  # skips if <name>_docling/document.md exists
 doc-convert document.pdf -f               # force re-conversion
 doc-convert document.pdf -o /custom/dir   # override output directory
+doc-convert document.pdf --stdout         # also print document.md to stdout (logs stay on stderr)
+doc-convert document.pdf --stdout | glow  # pipe straight into another tool
 ```
+
+`--stdout` prints the final `document.md` on process stdout once the conversion (and any
+`--analyze`/`--note` steps) finishes; it works with cached runs too. All logging already goes to
+stderr, so stdout stays clean for piping. Not combinable with multiple input files.
 
 ### Notes
 

@@ -100,6 +100,7 @@ def test_run_batch_interrupt_returns_130() -> None:
         ["--start-audio"],
         ["--download-models"],
         ["--download-enrichments"],
+        ["--stdout"],
     ],
 )
 def test_multi_file_rejects_incompatible_flags(extra: list[str]) -> None:

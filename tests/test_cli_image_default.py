@@ -43,8 +43,8 @@ def test_image_input_defaults_llm_to_ibm_haiku(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     options = captured["options"]
-    assert getattr(options, "llm") == "ibm/claude-haiku-4-5"
-    assert getattr(options, "engine") == Engine.LOCAL
+    assert options.llm == "ibm/claude-haiku-4-5"
+    assert options.engine == Engine.LOCAL
 
 
 def test_image_input_keeps_explicit_llm(tmp_path: Path) -> None:
@@ -77,4 +77,4 @@ def test_image_input_keeps_explicit_llm(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     options = captured["options"]
-    assert getattr(options, "llm") == "google/gemini-3.1-pro-preview"
+    assert options.llm == "google/gemini-3.1-pro-preview"

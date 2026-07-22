@@ -262,6 +262,12 @@ def main(
         help="Force note creation even if a similar note exists",
         show_default="off",
     ),
+    stdout: bool = typer.Option(
+        False,
+        "--stdout",
+        help="Print the resulting document.md to stdout when the conversion finishes.",
+        show_default="off",
+    ),
     force: bool = typer.Option(
         False,
         "-f",
@@ -343,6 +349,7 @@ def main(
             download_models=download_models,
             download_enrichments=download_enrichments,
             output=output,
+            stdout=stdout,
         )
         from doc_convert.batch import run_batch  # noqa: PLC0415
 
@@ -375,6 +382,7 @@ def main(
             note=note,
             similarity_threshold=similarity_threshold,
             note_force=note_force,
+            stdout=stdout,
             force=force,
             download_models=download_models,
             download_enrichments=download_enrichments,
@@ -386,12 +394,22 @@ def main(
         _cleanup_outputs()
 
 
+def _print_document_stdout(out_dir: Path) -> None:
+    """Print out_dir/document.md to stdout, for --stdout."""
+    doc_file = out_dir / "document.md"
+    if not doc_file.exists():
+        console.print("[yellow]--stdout: document.md not found, nothing to print.[/yellow]")
+        return
+    sys.stdout.write(doc_file.read_text(encoding="utf-8"))
+
+
 def _guard_batch_compatible(
     *,
     start_audio: bool,
     download_models: bool,
     download_enrichments: bool,
     output: str | None,
+    stdout: bool,
 ) -> None:
     """Reject option combinations that make no sense for multiple input files."""
     if start_audio:
@@ -402,6 +420,9 @@ def _guard_batch_compatible(
         raise typer.Exit(1)
     if output:
         console.print("[red]-o/--output targets a single directory; omit it when converting multiple files.[/red]")
+        raise typer.Exit(1)
+    if stdout:
+        console.print("[red]--stdout prints a single document.md; omit it when converting multiple files.[/red]")
         raise typer.Exit(1)
 
 
@@ -443,6 +464,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
     note: bool,
     similarity_threshold: float,
     note_force: bool,
+    stdout: bool,
     force: bool,
     download_models: bool,
     download_enrichments: bool,
@@ -499,6 +521,8 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             note_force=note_force,
             similarity_threshold=similarity_threshold,
         )
+        if stdout:
+            _print_document_stdout(out_dir)
         raise typer.Exit()
 
     if document is None:
@@ -539,6 +563,8 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             )
         finally:
             downloaded.unlink(missing_ok=True)
+        if stdout:
+            _print_document_stdout(out_dir)
         raise typer.Exit()
 
     # ── File-based conversion ────────────────────────────────────────────
@@ -597,6 +623,8 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                         similarity_threshold=similarity_threshold,
                         note_force=note_force,
                     )
+                if stdout:
+                    _print_document_stdout(out_dir)
                 raise typer.Exit()
             if is_audio_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
@@ -619,6 +647,8 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                     note=note,
                     similarity_threshold=similarity_threshold,
                 )
+                if stdout:
+                    _print_document_stdout(out_dir)
                 raise typer.Exit()
             if is_video_ext(ext):
                 out_dir = resolve_output_dir(doc_path, doc_path.stem, output)
@@ -640,6 +670,8 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                     note=note,
                     similarity_threshold=similarity_threshold,
                 )
+                if stdout:
+                    _print_document_stdout(out_dir)
                 raise typer.Exit()
 
             from doc_convert.formats import detect_format  # noqa: PLC0415
@@ -743,6 +775,9 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             create_note_from_conversion(
                 out_dir, settings, source_path=doc_path, lang=lang, similarity_threshold=similarity_threshold
             )
+
+        if stdout:
+            _print_document_stdout(out_dir)
     finally:
         if tmp_file and tmp_file.exists():
             tmp_file.unlink()
