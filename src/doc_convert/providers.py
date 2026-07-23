@@ -222,6 +222,12 @@ DEFAULT_AUDIO_LLM = "ibm/gemini-3.1-pro-preview"
 # sends text, so any provider works (no Files API constraint).
 DEFAULT_DOCUMENT_ANALYSIS_LLM = "ibm/claude-opus-4-8"
 
+# Default model for companion context analysis. Must be multimodal (companion
+# notes often reference screenshots/whiteboard captures sent inline). Gemini
+# 3.1 Pro via IBM ICA is used because it supports vision and is already the
+# default for audio transcription.
+DEFAULT_COMPANION_LLM = "ibm/gemini-3.1-pro-preview"
+
 # Default model for the PPTX whole-slide screenshot visual interpretation pass
 # (see pptx_slide_vlm.py). Confirmed available via IBM ICA's GET /models:
 # 'claude-sonnet-4-6' is listed alongside claude-sonnet-4-5/claude-opus-4-8.
@@ -305,6 +311,19 @@ def resolve_media_llm(llm: str | None, settings: Settings, *, media_type: str = 
 def resolve_document_analysis_llm(llm: str | None, settings: Settings) -> tuple[str, str, str]:
     """Resolve provider, model, and API key for the document `--analyze` text pass."""
     llm_spec = llm or DEFAULT_DOCUMENT_ANALYSIS_LLM
+    provider, model = parse_external_llm(llm_spec)
+    api_key = require_api_key(provider, settings)
+    return provider, model, api_key
+
+
+def resolve_companion_llm(companion_llm: str | None, llm: str | None, settings: Settings) -> tuple[str, str, str]:
+    """Resolve provider, model, and API key for companion context analysis.
+
+    Precedence: --companion-llm > --llm > DEFAULT_COMPANION_LLM.
+    The default is a multimodal model because companion notes commonly
+    reference screenshots that are sent inline with the analysis call.
+    """
+    llm_spec = companion_llm or llm or DEFAULT_COMPANION_LLM
     provider, model = parse_external_llm(llm_spec)
     api_key = require_api_key(provider, settings)
     return provider, model, api_key

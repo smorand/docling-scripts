@@ -173,6 +173,16 @@ def main(
         ),
         show_default="ibm/claude-sonnet-4-6",
     ),
+    companion_llm: str | None = typer.Option(
+        None,
+        "--companion-llm",
+        help=(
+            "Override the LLM used to analyze the companion .md context (including "
+            "inline screenshots). Precedence: --companion-llm > --llm > default. "
+            "Must be a multimodal model."
+        ),
+        show_default="ibm/gemini-3.1-pro-preview",
+    ),
     cpu: bool = typer.Option(
         False,
         "--cpu",
@@ -386,6 +396,7 @@ def main(
             force=force,
             download_models=download_models,
             download_enrichments=download_enrichments,
+            companion_llm=companion_llm,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted; cleaning up incomplete outputs[/yellow]")
@@ -468,6 +479,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
     force: bool,
     download_models: bool,
     download_enrichments: bool,
+    companion_llm: str | None,
 ) -> None:
     if download_models:
         preset = captions if (captions and "/" not in captions and captions != "off") else DEFAULT_LOCAL_PRESET
@@ -517,6 +529,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             analyze_model=analyze_model,
             meeting_summary=meeting_summary,
             companion_name_override=document,
+            companion_llm=companion_llm,
             note=note,
             note_force=note_force,
             similarity_threshold=similarity_threshold,
@@ -558,6 +571,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                 captions_spec=captions_spec,
                 media_llm=media_llm,
                 analyze_model=analyze_model,
+                companion_llm=companion_llm,
                 note=note,
                 similarity_threshold=similarity_threshold,
             )
@@ -644,6 +658,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                     media_llm=media_llm,
                     analyze_model=analyze_model,
                     meeting_summary=meeting_summary,
+                    companion_llm=companion_llm,
                     note=note,
                     similarity_threshold=similarity_threshold,
                 )
@@ -667,6 +682,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                     captions_spec=captions_spec,
                     media_llm=media_llm,
                     analyze_model=analyze_model,
+                    companion_llm=companion_llm,
                     note=note,
                     similarity_threshold=similarity_threshold,
                 )
@@ -687,7 +703,9 @@ def _dispatch(  # noqa: PLR0912, PLR0915
         # ── Companion file detection ────────────────────────────────────
         from doc_convert.companion import load_companion_context  # noqa: PLC0415
 
-        companion_ctx = load_companion_context(doc_path, out_dir, llm, settings, force=force, lang=lang)
+        companion_ctx = load_companion_context(
+            doc_path, out_dir, llm, settings, force=force, lang=lang, companion_llm=companion_llm
+        )
         if companion_ctx:
             meeting = f"{companion_ctx}\n\n{meeting}" if meeting else companion_ctx
 
@@ -811,6 +829,7 @@ def _run_media(
     analyze_model: str | None = None,
     meeting_summary: bool = False,
     companion_name_override: str | None = None,
+    companion_llm: str | None = None,
     note: bool = False,
     note_force: bool = False,
     similarity_threshold: float = 0.85,
@@ -819,7 +838,8 @@ def _run_media(
 
     ``media_llm`` (if set) overrides the model used for the actual media
     payload (audio/video → LLM). Otherwise falls back to ``llm`` then to the
-    media default. Companion context analysis still uses ``llm`` (text path).
+    media default. ``companion_llm`` overrides the model for companion context
+    analysis (multimodal, default ibm/gemini-3.1-pro-preview).
     """
     from doc_convert.companion import load_companion_context  # noqa: PLC0415
     from doc_convert.converters.media import MediaConverter  # noqa: PLC0415
@@ -835,6 +855,7 @@ def _run_media(
         force=force,
         name_override=companion_name_override,
         lang=lang,
+        companion_llm=companion_llm,
     )
     if companion_ctx:
         meeting = f"{companion_ctx}\n\n{meeting}" if meeting else companion_ctx

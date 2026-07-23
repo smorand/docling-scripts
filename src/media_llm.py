@@ -48,6 +48,71 @@ _RETRY_BACKOFF_SECONDS = (5.0, 15.0, 45.0)
 _INLINE_TOO_LARGE_MB = 60.0
 
 
+def post_with_retry(
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    *,
+    timeout: float = 300.0,
+    provider_label: str = "llm",
+    operation: str = "request",
+) -> httpx.Response:
+    """POST to an LLM endpoint, retrying transient 5xx/429 with exponential backoff.
+
+    Intended for text-only chat-completions calls (companion analysis, document
+    analysis, meeting summary, note metadata, PPTX slide VLM) that previously
+    called ``raise_for_status()`` directly without any retry. The ``media_llm``
+    already wraps multimodal requests with ``_send_media_request``; this covers
+    the remaining call sites.
+
+    Raises ``httpx.HTTPStatusError`` on non-retryable status after retries are
+    exhausted so callers' existing error handling is preserved.
+    """
+    last_resp: httpx.Response | None = None
+    for attempt in range(1, _MAX_MEDIA_ATTEMPTS + 1):
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                resp = client.post(url, headers=headers, json=body)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            if attempt < _MAX_MEDIA_ATTEMPTS:
+                wait = _RETRY_BACKOFF_SECONDS[min(attempt - 1, len(_RETRY_BACKOFF_SECONDS) - 1)]
+                logger.warning(
+                    "%s %s transport error (%s, attempt %d/%d); retrying in %.0fs",
+                    provider_label,
+                    operation,
+                    type(exc).__name__,
+                    attempt,
+                    _MAX_MEDIA_ATTEMPTS,
+                    wait,
+                )
+                time.sleep(wait)
+                continue
+            raise
+        if resp.is_success:
+            return resp
+        status = resp.status_code
+        if status in _RETRYABLE_STATUS and attempt < _MAX_MEDIA_ATTEMPTS:
+            wait = _RETRY_BACKOFF_SECONDS[min(attempt - 1, len(_RETRY_BACKOFF_SECONDS) - 1)]
+            logger.warning(
+                "%s %s returned %d (transient, attempt %d/%d); retrying in %.0fs",
+                provider_label,
+                operation,
+                status,
+                attempt,
+                _MAX_MEDIA_ATTEMPTS,
+                wait,
+            )
+            time.sleep(wait)
+            last_resp = resp
+            continue
+        resp.raise_for_status()  # non-retryable: propagate immediately
+        return resp  # unreachable, raise_for_status throws
+    # All retries exhausted on a retryable status
+    assert last_resp is not None
+    last_resp.raise_for_status()
+    return last_resp  # unreachable
+
+
 def _too_large_message(provider_label: str, file_name: str, size_mb: float) -> str:
     return (
         f"File too large for {provider_label} ({size_mb:.0f} MB raw payload).\n"

@@ -21,12 +21,11 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import cast
-
-import httpx
+from typing import Any, cast
 
 from config import Settings  # noqa: TC001
 from logging_config import console
+from media_llm import post_with_retry
 from tracing import trace_span
 
 logger = logging.getLogger(__name__)
@@ -265,34 +264,57 @@ def analyze_companion(
     settings: Settings,
     *,
     lang: str | None = None,
+    images: list[Path] | None = None,
 ) -> str:
     """Run lightweight LLM pre-analysis on the companion bundle.
 
     Extracts attendees, agenda, key terms, referenced doc summaries.
     When lang is set, the entire output is forced to that language.
+    When images are provided (referenced screenshots/captures from the companion),
+    they are sent inline as image_url parts in the same call.
     """
+    import base64  # noqa: PLC0415
+
     from doc_convert.providers import get_provider_url  # noqa: PLC0415
+    from media_llm import get_image_mime  # noqa: PLC0415
 
     system = _get_companion_prompt()
     if lang:
         lang_rule = f"HARD RULE: Write the ENTIRE response in {lang}, including all section headings and content."
         system = f"{lang_rule}\n\n{system}\n\n{lang_rule}"
 
-    with trace_span("companion.analyze", provider=provider, model=model):
+    user_parts: list[dict[str, Any]] = [{"type": "text", "text": f"Extract context from these notes:\n\n{bundle}"}]
+    for i, img in enumerate(images or [], 1):
+        try:
+            b64 = base64.b64encode(img.read_bytes()).decode()
+            mime = get_image_mime(img)
+            user_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            logger.debug("Companion: attaching image %d/%d: %s", i, len(images or []), img.name)
+        except Exception:
+            logger.warning("Companion: could not read image %s, skipping", img.name)
+
+    if len(user_parts) > 1:
+        logger.info("Companion: analyzing context with %s/%s (+%d image(s))", provider, model, len(user_parts) - 1)
+    else:
         logger.info("Companion: analyzing context with %s/%s", provider, model)
-        with httpx.Client(timeout=120.0) as client:
-            resp = client.post(
-                get_provider_url(provider, settings),
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": f"Extract context from these notes:\n\n{bundle}"},
-                    ],
-                },
-            )
-            resp.raise_for_status()
+
+    user_content: str | list[dict[str, Any]] = user_parts if len(user_parts) > 1 else user_parts[0]["text"]
+
+    with trace_span("companion.analyze", provider=provider, model=model, images=len(user_parts) - 1):
+        resp = post_with_retry(
+            get_provider_url(provider, settings),
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            body={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_content},
+                ],
+            },
+            timeout=120.0,
+            provider_label=provider,
+            operation="companion.analyze",
+        )
 
     return cast("str", resp.json()["choices"][0]["message"]["content"])
 
@@ -318,6 +340,7 @@ def load_companion_context(
     force: bool = False,
     name_override: str | None = None,
     lang: str | None = None,
+    companion_llm: str | None = None,
 ) -> str | None:
     """Main entry point: detect, load, analyze, cache, and return companion context.
 
@@ -327,12 +350,15 @@ def load_companion_context(
     Args:
         source_path: The file being converted
         output_dir: The _docling/ output directory
-        llm: Provider/model override
+        llm: General provider/model override (--llm)
         settings: Application settings
         force: Force re-analysis even if cached
         name_override: For --start-audio, the name to search for (e.g. "Meeting Name")
         lang: Output language for the companion context (e.g. "fr"). When set,
             invalidates cache if previously generated in a different language.
+        companion_llm: Explicit override for the companion analysis model (--companion-llm).
+            Takes precedence over llm. Defaults to a multimodal model (Google Gemini)
+            because companion notes commonly reference screenshots.
     """
     try:
         companion_path = detect_companion(source_path, name_override=name_override)
@@ -354,11 +380,19 @@ def load_companion_context(
         output_dir.mkdir(parents=True, exist_ok=True)
         bundle = build_companion_bundle(companion_path, output_dir, settings)
 
-        # Analyze with the document-analysis LLM (text-only, same default as --analyze)
-        from doc_convert.providers import resolve_document_analysis_llm  # noqa: PLC0415
+        # Collect referenced images to send inline in the analysis call
+        from media_llm import is_image_ext  # noqa: PLC0415
 
-        provider, model, api_key = resolve_document_analysis_llm(llm, settings)
-        context = analyze_companion(bundle, provider, model, api_key, settings, lang=lang)
+        all_refs = resolve_reference_paths(companion_path)
+        image_refs = [p for p in all_refs if is_image_ext(p.suffix)]
+        if image_refs:
+            logger.info("Companion: found %d referenced image(s) to include in analysis", len(image_refs))
+
+        # Analyze with the companion LLM (multimodal by default)
+        from doc_convert.providers import resolve_companion_llm  # noqa: PLC0415
+
+        provider, model, api_key = resolve_companion_llm(companion_llm, llm, settings)
+        context = analyze_companion(bundle, provider, model, api_key, settings, lang=lang, images=image_refs or None)
 
         # Cache result with language sentinel
         sentinel = f"<!-- doc-convert:lang={lang or ''} -->\n"
