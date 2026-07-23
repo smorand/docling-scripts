@@ -49,6 +49,7 @@ src/
 │   ├── __init__.py       # Re-exports app
 │   ├── cli.py            # Typer CLI entry point + dispatch
 │   ├── base.py           # BaseConverter + ConvertOptions
+│   ├── image_prep.py     # Image size enforcement: ensure_image_under_limit (JPEG recompress before API send)
 │   ├── converters/       # One class per document type
 │   │   ├── pdf.py        # PdfConverter (local Docling pipeline; captions via base.describe_figures; OCR engine via _build_ocr_options)
 │   │   ├── docx.py       # DocxConverter (Docling native XML + figure captions)
@@ -104,6 +105,7 @@ src/
 - Cache: skip conversion if output exists, use `-f` to force.
 - Unified output: all conversions write to `<name>_docling/document.md`.
 - Apple Silicon: PDF pipeline and local captioner auto-retry on CPU when an MPS float64 error is raised (detection in `vlm.is_mps_float64_error`). `--cpu` is still available to force CPU from the start.
+- Image size guard (`doc_convert.image_prep`): every image sent to a cloud LLM (captions, figure descriptions, OCR crops, PPTX slide screenshots, companion images) passes through `ensure_image_under_limit` before encoding. Images >5 MB are converted to JPEG at quality 90 and quality is reduced by 10% per step down to 20%; if still oversized the image is halved in resolution and the loop restarts (up to 4 halvings). A warning is logged whenever any compression or downscale occurs. The original file is never modified; a tmp `.jpg` is created and auto-deleted via the `PreparedImage` context manager. PDFs skip this path entirely.
 - Output guard (`doc_convert.output_guard`): every output dir is registered before mkdir; on any failure (exception, Ctrl+C, SIGTERM/SIGHUP/SIGQUIT, typer.Exit), `cleanup_pending()` runs in a `finally` block and removes the dir if it was newly created and contains no **non-empty** `document.md` or `audio.ogg` (a 0-byte marker is a silently-failed conversion, not an artifact, and is cleaned up too). Pre-existing dirs keep their original content; only files added by the failed run are removed. SIGKILL cannot be caught.
 
 ## Quality Gate

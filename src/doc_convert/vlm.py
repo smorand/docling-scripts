@@ -134,6 +134,7 @@ def describe_images_with_external_llm(
     for i, (img_path, ctx) in enumerate(zip(image_paths, contexts, strict=True), 1):
         full_prompt = f"{ctx}{base_prompt}" if ctx else base_prompt
         logger.info("Describing image %d/%d: %s", i, total, img_path.name)
+        # convert_image_to_markdown handles size enforcement internally for images.
         md = convert_image_to_markdown(img_path, provider, model, settings, prompt=full_prompt)
         descriptions.append(md.strip())
     return descriptions

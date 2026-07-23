@@ -273,7 +273,12 @@ def _analyze_single_slide(
     api_key: str,
     client: httpx.Client,
 ) -> str:
-    b64 = base64.b64encode(image_path.read_bytes()).decode()
+    from doc_convert.image_prep import ensure_image_under_limit  # noqa: PLC0415
+
+    with ensure_image_under_limit(image_path) as prepared:
+        raw = prepared.path.read_bytes()
+        mime = "image/jpeg" if prepared.path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
+        b64 = base64.b64encode(raw).decode()
     resp = client.post(
         get_provider_url(provider, settings),
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -285,7 +290,7 @@ def _analyze_single_slide(
                     "role": "user",
                     "content": [
                         {"type": "text", "text": "Analyze this PowerPoint slide screenshot in detail."},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
                     ],
                 },
             ],

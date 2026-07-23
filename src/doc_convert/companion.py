@@ -286,8 +286,12 @@ def analyze_companion(
     user_parts: list[dict[str, Any]] = [{"type": "text", "text": f"Extract context from these notes:\n\n{bundle}"}]
     for i, img in enumerate(images or [], 1):
         try:
-            b64 = base64.b64encode(img.read_bytes()).decode()
-            mime = get_image_mime(img)
+            from doc_convert.image_prep import ensure_image_under_limit  # noqa: PLC0415
+
+            with ensure_image_under_limit(img) as prepared:
+                raw = prepared.path.read_bytes()
+                mime = get_image_mime(prepared.path)
+                b64 = base64.b64encode(raw).decode()
             user_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
             logger.debug("Companion: attaching image %d/%d: %s", i, len(images or []), img.name)
         except Exception:
