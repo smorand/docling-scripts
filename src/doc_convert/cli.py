@@ -542,6 +542,25 @@ def _dispatch(  # noqa: PLR0912, PLR0915
         console.print("Missing argument 'DOCUMENT'. See --help.")
         raise typer.Exit(1)
 
+    # ── Early exit: output already exists ───────────────────────────────
+    # For local file inputs (not URLs, not --start-audio, not -o override),
+    # bail out immediately if <name>_docling/document.md already exists and
+    # is non-empty. The user must pass -f to re-convert.
+    if not force and not output and not start_audio:
+        from video import is_youtube_url as _is_yt  # noqa: PLC0415
+
+        from doc_convert.google_docs import is_google_url as _is_goog  # noqa: PLC0415
+
+        if not _is_yt(document) and not _is_goog(document):
+            _early_path = Path(document)
+            if _early_path.exists():
+                _early_out = resolve_output_dir(_early_path, _early_path.stem, None)
+                _doc_md = _early_out / "document.md"
+                if _doc_md.exists() and _doc_md.stat().st_size > 0:
+                    console.print(f"[yellow]Already converted:[/yellow] {_early_out}/")
+                    console.print("[dim]Use -f to force re-conversion[/dim]")
+                    raise typer.Exit()
+
     configure_tracing("doc-convert")
     settings = Settings()
 
