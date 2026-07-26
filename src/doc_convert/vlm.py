@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from pathlib import Path  # noqa: TC003
 
 import typer
@@ -128,6 +129,9 @@ def describe_images_with_external_llm(
     if len(contexts) != len(image_paths):
         raise ValueError("contexts length must match image_paths length")
 
+    _MAX_RETRIES = 5
+    _RETRY_BASE_DELAY = 2.0  # seconds; attempt k waits k * base
+
     total = len(image_paths)
     logger.info("Describing %d image(s) with %s/%s", total, provider, model)
     descriptions: list[str] = []
@@ -135,6 +139,24 @@ def describe_images_with_external_llm(
         full_prompt = f"{ctx}{base_prompt}" if ctx else base_prompt
         logger.info("Describing image %d/%d: %s", i, total, img_path.name)
         # convert_image_to_markdown handles size enforcement internally for images.
-        md = convert_image_to_markdown(img_path, provider, model, settings, prompt=full_prompt)
+        # Retry on transient errors (SSL glitches, connection resets, etc.).
+        md = ""
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                md = convert_image_to_markdown(img_path, provider, model, settings, prompt=full_prompt)
+                break
+            except Exception as exc:
+                if attempt == _MAX_RETRIES:
+                    logger.error(
+                        "Image %s failed after %d attempts, skipping: %s",
+                        img_path.name, _MAX_RETRIES, exc,
+                    )
+                else:
+                    delay = attempt * _RETRY_BASE_DELAY
+                    logger.warning(
+                        "Image %s attempt %d/%d failed (%s), retrying in %.0fs",
+                        img_path.name, attempt, _MAX_RETRIES, exc, delay,
+                    )
+                    time.sleep(delay)
         descriptions.append(md.strip())
     return descriptions

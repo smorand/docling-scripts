@@ -186,7 +186,13 @@ def analyze_slide_images(
         for i, (slide_number, rel_path) in enumerate(sorted(image_paths_by_slide.items()), 1):
             logger.info("Analyzing slide %d/%d (slide %d)", i, total, slide_number)
             img_path = output_dir / rel_path
+            if not img_path.exists():
+                logger.warning("Slide screenshot not found, skipping: %s", img_path)
+                continue
             description = _analyze_single_slide(img_path, provider, model, settings, api_key, client)
+            if not description:
+                logger.warning("Skipping slide %d visual analysis (API error)", slide_number)
+                continue
             analyses[slide_number] = SlideVisualAnalysis(
                 slide_number=slide_number,
                 image_path=rel_path,
@@ -203,6 +209,9 @@ def build_slide_render_artifacts(
     llm: str = DEFAULT_PPTX_SLIDE_VLM,
 ) -> SlideRenderArtifacts:
     """Render slides, run the VLM visual analysis, and extract speaker notes."""
+    # Resolve to absolute path immediately so that relative paths stay valid
+    # regardless of any cwd changes during the conversion pipeline.
+    output_dir = output_dir.resolve()
     image_paths_by_slide = render_pptx_slides(pptx_path, output_dir)
     analyses_by_slide = analyze_slide_images(image_paths_by_slide, output_dir, settings, llm=llm)
     notes_by_slide = extract_slide_notes(pptx_path)
@@ -300,6 +309,13 @@ def _analyze_single_slide(
     if resp.status_code == _HTTP_NOT_FOUND:
         console.print(f"[red]Model not found for PPTX slide analysis: {provider}/{model}[/red]")
         raise typer.Exit(1)
-    resp.raise_for_status()
+    if not resp.is_success:
+        logger.warning(
+            "Slide analysis API error %d for %s (body: %.200s) -- skipping slide",
+            resp.status_code,
+            image_path.name,
+            resp.text,
+        )
+        return ""
     content: str = resp.json()["choices"][0]["message"]["content"]
     return content
