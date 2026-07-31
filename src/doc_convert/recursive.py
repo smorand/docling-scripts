@@ -80,7 +80,7 @@ def convert_children(
             )
             converter = _build_converter(path, options, llm)
             converter.convert()
-            make_document_symlink(out_dir)
+            make_document_symlink(out_dir, symlink=False)
             doc_md_path = out_dir / "document.md"
             content = doc_md_path.read_text() if doc_md_path.exists() else ""
             entries.append(AttachmentEntry(path, out_dir, content, converted=bool(content)))

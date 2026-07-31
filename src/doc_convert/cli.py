@@ -301,6 +301,12 @@ def main(
         ),
         show_default="off",
     ),
+    symlink: bool = typer.Option(
+        False,
+        "--symlink",
+        help="Create a <name>.md symlink next to the _docling/ folder pointing to document.md",
+        show_default="off",
+    ),
     parallel: int = typer.Option(
         1,
         "-P",
@@ -397,6 +403,7 @@ def main(
             download_models=download_models,
             download_enrichments=download_enrichments,
             companion_llm=companion_llm,
+            symlink=symlink,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted; cleaning up incomplete outputs[/yellow]")
@@ -480,6 +487,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
     download_models: bool,
     download_enrichments: bool,
     companion_llm: str | None,
+    symlink: bool,
 ) -> None:
     if download_models:
         preset = captions if (captions and "/" not in captions and captions != "off") else DEFAULT_LOCAL_PRESET
@@ -533,6 +541,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             note=note,
             note_force=note_force,
             similarity_threshold=similarity_threshold,
+            symlink=symlink,
         )
         if stdout:
             _print_document_stdout(out_dir)
@@ -593,6 +602,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                 companion_llm=companion_llm,
                 note=note,
                 similarity_threshold=similarity_threshold,
+                symlink=symlink,
             )
         finally:
             downloaded.unlink(missing_ok=True)
@@ -636,7 +646,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                     eml_converter = EmlConverter(doc_path, eml_options)
                 if not check_step_cache(out_dir, "document.md", force):
                     eml_converter.convert()
-                make_document_symlink(out_dir)
+                make_document_symlink(out_dir, symlink=symlink)
                 if (
                     analyze
                     and not check_step_cache(out_dir, "analyze.md", force)
@@ -680,6 +690,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                     companion_llm=companion_llm,
                     note=note,
                     similarity_threshold=similarity_threshold,
+                    symlink=symlink,
                 )
                 if stdout:
                     _print_document_stdout(out_dir)
@@ -704,6 +715,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                     companion_llm=companion_llm,
                     note=note,
                     similarity_threshold=similarity_threshold,
+                    symlink=symlink,
                 )
                 if stdout:
                     _print_document_stdout(out_dir)
@@ -795,7 +807,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
         # Step 1: Conversion (skip if document.md exists)
         if not check_step_cache(out_dir, "document.md", force):
             converter.convert()
-        make_document_symlink(out_dir)
+        make_document_symlink(out_dir, symlink=symlink)
 
         # Step 2: Analysis (skip if analyze.md exists)
         if (
@@ -852,6 +864,7 @@ def _run_media(
     note: bool = False,
     note_force: bool = False,
     similarity_threshold: float = 0.85,
+    symlink: bool = False,
 ) -> None:
     """Dispatch to MediaConverter with independent step caching.
 
@@ -902,7 +915,7 @@ def _run_media(
     # Step 1: Conversion (skip if document.md exists)
     if not check_step_cache(output_dir, "document.md", force):
         converter.convert()
-    make_document_symlink(output_dir)
+    make_document_symlink(output_dir, symlink=symlink)
 
     # Step 2: Analysis (skip if analyze.md exists)
     if (

@@ -62,7 +62,7 @@ def check_step_cache(out_dir: Path, filename: str, force: bool) -> bool:
 _DOCLING_SUFFIX = "_docling"
 
 
-def make_document_symlink(output_dir: Path) -> None:
+def make_document_symlink(output_dir: Path, *, symlink: bool = False) -> None:
     """Create ``<output_dir_stem>.md`` next to ``output_dir`` as a symlink to
     ``<output_dir>/document.md``, so the user can open the converted document
     without diving into the ``_docling/`` folder.
@@ -73,6 +73,9 @@ def make_document_symlink(output_dir: Path) -> None:
           ``.md`` next to an audio source); only existing symlinks are
           refreshed.
     """
+    if not symlink:
+        return
+
     target = output_dir / "document.md"
     if not target.exists():
         return
