@@ -63,7 +63,7 @@ PRESET_REPO_IDS: dict[str, str] = {
 # the local smolvlm preset if none has credentials. IBM ICA is the single
 # credential we consolidate on (it also fronts Google's Gemini models), so the
 # auto-path stays on ibm/ and never requires a separate GOOGLE_API_KEY.
-AUTO_CAPTIONS_PREFERENCES: tuple[str, ...] = ("ibm/claude-haiku-4-5",)
+AUTO_CAPTIONS_PREFERENCES: tuple[str, ...] = ("ibm/claude-sonnet-4-5",)
 
 
 @dataclass(frozen=True)
@@ -193,7 +193,7 @@ def resolve_captions(value: str | None, llm: str | None, settings: Settings) -> 
         1. Explicit --captions value (any form).
         2. --llm <provider/model> → captions go to that same model.
         3. First cloud preference in AUTO_CAPTIONS_PREFERENCES with creds in env.
-           Today that means ibm/claude-haiku-4-5 if IBM ICA is configured.
+           Today that means ibm/claude-sonnet-4-5 if IBM ICA is configured.
         4. Local default preset (smolvlm) when no cloud creds are present.
     """
     from doc_convert.providers import parse_external_llm  # noqa: PLC0415

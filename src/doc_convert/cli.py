@@ -122,7 +122,7 @@ def main(
         help=(
             f"Figure captioner. One of: 'off', a local preset ({', '.join(LOCAL_PRESETS)}), or a 'provider/model' slug."
         ),
-        show_default=("same as --llm if set, else ibm/claude-haiku-4-5 if IBM ICA is configured, else smolvlm"),
+        show_default=("same as --llm if set, else ibm/claude-sonnet-4-5 if IBM ICA is configured, else smolvlm"),
     ),
     engine: Engine = typer.Option(
         Engine.LOCAL,

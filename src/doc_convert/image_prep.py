@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 # 5 MB hard limit (Bedrock / IBM ICA / most providers).  Keep 200 KB margin.
 MAX_IMAGE_BYTES: int = 5 * 1024 * 1024 - 200 * 1024  # 4 996 352 bytes
 
+# Maximum side length (px) before downscaling.  Avoids sending unnecessarily
+# large images to cloud APIs while preserving enough detail for VLM reading.
+MAX_IMAGE_SIDE: int = 5000
+
 # JPEG quality steps: start high, drop by 10 % each round.
 _QUALITY_START = 90
 _QUALITY_STEP = 10
@@ -86,47 +90,59 @@ def ensure_image_under_limit(
     *,
     max_bytes: int = MAX_IMAGE_BYTES,
     max_pixels: int | None = None,
+    max_side: int | None = MAX_IMAGE_SIDE,
 ) -> PreparedImage:
     """Return a ``PreparedImage`` whose file is guaranteed to be <= ``max_bytes``.
 
-    Optionally also caps the total pixel count to ``max_pixels`` before any
-    size check, by downscaling while preserving aspect ratio. This is useful
-    when the image will be upscaled internally before the API call (e.g.
-    Docling's scale=2.0 quadruples the pixel count before PNG encoding).
+    Optionally caps dimensions before any size check:
+    - ``max_side``: downscale so the longest side <= max_side (default 5000 px).
+    - ``max_pixels``: downscale to fit within total pixel count (useful when
+      the image will be upscaled internally, e.g. Docling scale=2.0).
+    Both are applied in order (max_side first, then max_pixels on the result).
 
     Strategy:
-    1. If max_pixels is set, downscale to fit within max_pixels first.
-    2. If the (possibly downscaled) file already fits max_bytes, return unchanged.
-    3. Convert to JPEG (RGB) at quality ``_QUALITY_START``.
-    4. If still too large, reduce quality by ``_QUALITY_STEP`` until the image
+    1. If max_side is set, downscale so longest side <= max_side.
+    2. If max_pixels is set, downscale to fit within max_pixels.
+    3. If the (possibly downscaled) file already fits max_bytes, return unchanged.
+    4. Convert to JPEG (RGB) at quality ``_QUALITY_START``.
+    5. If still too large, reduce quality by ``_QUALITY_STEP`` until the image
        fits or quality reaches ``_QUALITY_MIN``.
-    5. If even the minimum quality exceeds the limit, halve the image dimensions
+    6. If even the minimum quality exceeds the limit, halve the image dimensions
        and retry the quality loop (may repeat up to 3 times).
 
     Logs a warning whenever any compression or downscale is applied.
     """
-    # Step 0: cap pixel count if requested (before any size check).
-    # This is useful when the image will be upscaled internally (e.g. Docling
-    # scale=2.0 quadruples pixel count before PNG encoding).
-    if max_pixels is not None:
-        # Open to check dimensions without decoding the whole image.
-        from PIL import Image as _PIL  # noqa: PLC0415
+    from PIL import Image as _PIL  # noqa: PLC0415
 
+    # Step 0a: cap longest side if requested.
+    if max_side is not None:
+        with _PIL.open(src) as _probe:
+            w, h = _probe.size
+        if max(w, h) > max_side:
+            ratio = max_side / max(w, h)
+            new_w = max(1, int(w * ratio))
+            new_h = max(1, int(h * ratio))
+            logger.warning(
+                "Image %s is %dx%d -- downscaling to %dx%d (max side %d px)",
+                src.name, w, h, new_w, new_h, max_side,
+            )
+            img_full = _open_as_rgb(src)
+            img_resized = img_full.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            buf = _encode_jpeg(img_resized, _QUALITY_START)
+            src = _write_tmp(buf).path  # type: ignore[assignment]
+
+    # Step 0b: cap pixel count if requested (e.g. Docling scale=2.0 upscales
+    # quadruples pixel count before PNG encoding).
+    if max_pixels is not None:
         with _PIL.open(src) as _probe:
             w, h = _probe.size
         if w * h > max_pixels:
-            # Calculate new dimensions preserving aspect ratio.
             ratio = (max_pixels / (w * h)) ** 0.5
             new_w = max(1, int(w * ratio))
             new_h = max(1, int(h * ratio))
             logger.warning(
                 "Image %s is %dx%d (%d px) -- downscaling to %dx%d to stay under pixel cap",
-                src.name,
-                w,
-                h,
-                w * h,
-                new_w,
-                new_h,
+                src.name, w, h, w * h, new_w, new_h,
             )
             img_full = _open_as_rgb(src)
             img_resized = img_full.resize((new_w, new_h), Image.Resampling.LANCZOS)

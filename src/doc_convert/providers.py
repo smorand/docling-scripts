@@ -236,7 +236,7 @@ DEFAULT_PPTX_SLIDE_VLM = "ibm/claude-sonnet-4-6"
 # Default model for image conversion when the input itself is an image and the
 # user did not pass --llm. Images always go through the external VLM pipeline,
 # so we auto-fill a small IBM-hosted Claude model instead of hard-failing.
-DEFAULT_IMAGE_LLM = "ibm/claude-haiku-4-5"
+DEFAULT_IMAGE_LLM = "ibm/claude-sonnet-4-5"
 
 
 def get_provider_url(provider: str, settings: Settings) -> str:

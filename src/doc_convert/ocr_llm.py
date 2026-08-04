@@ -9,7 +9,7 @@ single ``TextCell`` covering that region.
 
 This keeps the rest of the local pipeline intact (layout, tables, figures,
 formulas) while letting ``--ocr-model provider/model`` (e.g.
-``ibm/claude-haiku-4-5``) handle the text-from-image step.
+``ibm/claude-sonnet-4-5``) handle the text-from-image step.
 
 Note: docling crops *regions* before OCR, so a fully-scanned page becomes one
 big region read as a single blob (no internal reading order). For fully-scanned
