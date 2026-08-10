@@ -61,3 +61,37 @@ def test_ocr_off_disables() -> None:
 
     assert ConvertOptions(output_dir=Path("/tmp/x"), ocr=OcrOff()).ocr_enabled is False
     assert ConvertOptions(output_dir=Path("/tmp/x"), ocr=OcrLocal("tesseract")).ocr_enabled is True
+
+
+def test_post_process_cells_call_matches_installed_docling() -> None:
+    """Regression: LlmOcrModel must call post_process_cells with the arity the
+    installed docling actually declares.
+
+    A previous change passed an extra ``conv_res`` argument, which raised
+    ``TypeError`` the moment OCR actually fired on a bitmap region. Since the
+    LLM OCR engine is the default --ocr-model, that crashed scanned-PDF
+    conversions. Pin the contract instead of trusting it.
+    """
+    import ast  # noqa: PLC0415
+    import inspect  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from docling.models.base_ocr_model import BaseOcrModel  # noqa: PLC0415
+
+    expected = [p for p in inspect.signature(BaseOcrModel.post_process_cells).parameters if p != "self"]
+
+    source = Path(inspect.getfile(LlmOcrModel)).read_text(encoding="utf-8")
+    calls = [
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "post_process_cells"
+    ]
+
+    assert calls, "LlmOcrModel is expected to call post_process_cells"
+    for call in calls:
+        assert len(call.args) == len(expected), (
+            f"post_process_cells called with {len(call.args)} positional args, "
+            f"but installed docling declares {len(expected)}: {expected}"
+        )

@@ -131,7 +131,7 @@ class LlmOcrModel(BaseOcrModel):
                     )
                 )
 
-            self.post_process_cells(cells, page, conv_res)
+            self.post_process_cells(cells, page)
             yield page
 
 
