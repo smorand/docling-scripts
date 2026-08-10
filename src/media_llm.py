@@ -107,8 +107,10 @@ def post_with_retry(
             continue
         resp.raise_for_status()  # non-retryable: propagate immediately
         return resp  # unreachable, raise_for_status throws
-    # All retries exhausted on a retryable status
-    assert last_resp is not None
+    # All retries exhausted on a retryable status. Not an assert: under python -O
+    # it would vanish and turn the intended HTTP error into an AttributeError.
+    if last_resp is None:  # pragma: no cover - the retry branch always sets it
+        raise RuntimeError(f"{provider_label} {operation} exhausted retries without any response")
     last_resp.raise_for_status()
     return last_resp  # unreachable
 

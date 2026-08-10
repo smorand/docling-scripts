@@ -585,9 +585,8 @@ def _dispatch(  # noqa: PLR0912, PLR0915
     # bail out immediately if <name>_docling/document.md already exists and
     # is non-empty. The user must pass -f to re-convert.
     if not force and not output and not start_audio:
-        from video import is_youtube_url as _is_yt  # noqa: PLC0415
-
         from doc_convert.google_docs import is_google_url as _is_goog  # noqa: PLC0415
+        from video import is_youtube_url as _is_yt  # noqa: PLC0415
 
         if not _is_yt(document) and not _is_goog(document):
             _early_path = Path(document)

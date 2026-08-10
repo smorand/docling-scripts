@@ -124,12 +124,17 @@ def ensure_image_under_limit(
             new_h = max(1, int(h * ratio))
             logger.warning(
                 "Image %s is %dx%d -- downscaling to %dx%d (max side %d px)",
-                src.name, w, h, new_w, new_h, max_side,
+                src.name,
+                w,
+                h,
+                new_w,
+                new_h,
+                max_side,
             )
             img_full = _open_as_rgb(src)
             img_resized = img_full.resize((new_w, new_h), Image.Resampling.LANCZOS)
             buf = _encode_jpeg(img_resized, _QUALITY_START)
-            src = _write_tmp(buf).path  # type: ignore[assignment]
+            src = _write_tmp(buf).path
 
     # Step 0b: cap pixel count if requested (e.g. Docling scale=2.0 upscales
     # quadruples pixel count before PNG encoding).
@@ -142,7 +147,12 @@ def ensure_image_under_limit(
             new_h = max(1, int(h * ratio))
             logger.warning(
                 "Image %s is %dx%d (%d px) -- downscaling to %dx%d to stay under pixel cap",
-                src.name, w, h, w * h, new_w, new_h,
+                src.name,
+                w,
+                h,
+                w * h,
+                new_w,
+                new_h,
             )
             img_full = _open_as_rgb(src)
             img_resized = img_full.resize((new_w, new_h), Image.Resampling.LANCZOS)

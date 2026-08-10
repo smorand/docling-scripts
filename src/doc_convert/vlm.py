@@ -149,13 +149,19 @@ def describe_images_with_external_llm(
                 if attempt == _MAX_RETRIES:
                     logger.error(
                         "Image %s failed after %d attempts, skipping: %s",
-                        img_path.name, _MAX_RETRIES, exc,
+                        img_path.name,
+                        _MAX_RETRIES,
+                        exc,
                     )
                 else:
                     delay = attempt * _RETRY_BASE_DELAY
                     logger.warning(
                         "Image %s attempt %d/%d failed (%s), retrying in %.0fs",
-                        img_path.name, attempt, _MAX_RETRIES, exc, delay,
+                        img_path.name,
+                        attempt,
+                        _MAX_RETRIES,
+                        exc,
+                        delay,
                     )
                     time.sleep(delay)
         descriptions.append(md.strip())

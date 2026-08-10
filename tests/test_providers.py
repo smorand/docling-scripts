@@ -160,4 +160,4 @@ def test_resolve_image_llm_uses_explicit_value() -> None:
 
 def test_resolve_image_llm_default() -> None:
     assert resolve_image_llm(None) == DEFAULT_IMAGE_LLM
-    assert DEFAULT_IMAGE_LLM == "ibm/claude-haiku-4-5"
+    assert DEFAULT_IMAGE_LLM == "ibm/claude-sonnet-4-5"

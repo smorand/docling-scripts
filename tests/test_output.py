@@ -46,11 +46,20 @@ def test_check_cache_empty_dir(tmp_path: Path) -> None:
     assert check_cache(out, force=True) is False
 
 
-def test_make_document_symlink_creates_link(tmp_path: Path) -> None:
+def test_make_document_symlink_is_opt_in(tmp_path: Path) -> None:
+    """Default (no --symlink) must create nothing at all."""
     out = tmp_path / "note_docling"
     out.mkdir()
     (out / "document.md").write_text("content")
     make_document_symlink(out)
+    assert not (tmp_path / "note.md").exists()
+
+
+def test_make_document_symlink_creates_link(tmp_path: Path) -> None:
+    out = tmp_path / "note_docling"
+    out.mkdir()
+    (out / "document.md").write_text("content")
+    make_document_symlink(out, symlink=True)
     link = tmp_path / "note.md"
     assert link.is_symlink()
     assert link.resolve() == (out / "document.md").resolve()
@@ -59,7 +68,7 @@ def test_make_document_symlink_creates_link(tmp_path: Path) -> None:
 def test_make_document_symlink_skips_without_document(tmp_path: Path) -> None:
     out = tmp_path / "note_docling"
     out.mkdir()
-    make_document_symlink(out)
+    make_document_symlink(out, symlink=True)
     assert not (tmp_path / "note.md").exists()
 
 
@@ -70,6 +79,6 @@ def test_make_document_symlink_keeps_existing_regular_file(tmp_path: Path) -> No
     # a companion .md already sits next to the output dir
     companion = tmp_path / "meeting.md"
     companion.write_text("my notes")
-    make_document_symlink(out)
+    make_document_symlink(out, symlink=True)
     assert not companion.is_symlink()
     assert companion.read_text() == "my notes"

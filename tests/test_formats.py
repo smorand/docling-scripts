@@ -72,7 +72,7 @@ def test_resolve_captions_llm_fallback(empty_settings: Settings) -> None:
 def test_resolve_captions_auto_prefers_credentialed_cloud(ibm_settings: Settings) -> None:
     # No --captions, no --llm: first cloud preference with creds is picked.
     spec = resolve_captions(None, None, ibm_settings)
-    assert spec == CaptionsLlm("ibm", "claude-haiku-4-5")
+    assert spec == CaptionsLlm("ibm", "claude-sonnet-4-5")
 
 
 def test_resolve_captions_local_default_when_only_google(google_settings: Settings) -> None:

@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from doc_convert.image_prep import MAX_IMAGE_BYTES, PreparedImage, ensure_image_under_limit
-
+from doc_convert import image_prep as ip
+from doc_convert.image_prep import ensure_image_under_limit
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,7 +39,7 @@ def test_small_image_is_unchanged(tmp_path: Path) -> None:
     src = _make_png(tmp_path / "small.png", 100, 100)
     prepared = ensure_image_under_limit(src)
     assert prepared.path == src
-    assert not prepared._is_tmp  # noqa: SLF001
+    assert not prepared._is_tmp
 
 
 def test_small_image_context_manager(tmp_path: Path) -> None:
@@ -61,8 +61,6 @@ def test_large_png_gets_compressed(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     We monkeypatch MAX_IMAGE_BYTES to a tiny threshold so we can exercise
     the compression path with a small test image.
     """
-    import doc_convert.image_prep as ip
-
     src = _make_png(tmp_path / "big.png", 200, 200)
     original_size = src.stat().st_size
 
@@ -71,7 +69,7 @@ def test_large_png_gets_compressed(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     prepared = ensure_image_under_limit(src, max_bytes=1)
     try:
-        assert prepared._is_tmp  # noqa: SLF001
+        assert prepared._is_tmp
         assert prepared.path != src
         assert prepared.path.suffix.lower() == ".jpg"
         assert prepared.path.exists()
