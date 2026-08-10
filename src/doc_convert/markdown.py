@@ -267,6 +267,11 @@ def _render_item_lines(
             lines.append(block)
             lines.append("")
     elif isinstance(item, PictureItem):
+        fig_path = artifacts.figure_paths.get(ref, "")
+        if not fig_path:
+            # Dropped by the caption filter (size floor) or extraction failed:
+            # nothing to show, the figure disappears from document.md entirely.
+            return lines
         ctx = contexts.get(ref, FloatingContext())
         lines.append(_heading_for(ctx.label, "Figure", ctx.caption))
         lines.append("")
@@ -274,10 +279,8 @@ def _render_item_lines(
         if block:
             lines.append(block)
             lines.append("")
-        fig_path = artifacts.figure_paths.get(ref, "")
-        if fig_path:
-            lines.append(f"*Image: [`{fig_path}`]({fig_path})*")
-            lines.append("")
+        lines.append(f"*Image: [`{fig_path}`]({fig_path})*")
+        lines.append("")
     else:
         text = getattr(item, "text", None)
         if text:
@@ -380,10 +383,14 @@ def build_pptx_slides_markdown(
         lines.append(f"## Slide {slide_no}{suffix}\n")
 
         lines.append("### Extracted Content (text + figures)\n")
-        slide_items = items_by_slide.get(slide_no, [])
-        if slide_items:
-            for ref, item in slide_items:
-                lines.extend(_render_item_lines(item, doc, ref, artifacts, contexts, heading_offset=3))
+        rendered: list[str] = []
+        for ref, item in items_by_slide.get(slide_no, []):
+            rendered.extend(_render_item_lines(item, doc, ref, artifacts, contexts, heading_offset=3))
+        # A slide can have items that render to nothing: every figure on it was
+        # dropped by the caption filter, or extraction failed. Emit the
+        # placeholder rather than an ambiguous empty section.
+        if any(line.strip() for line in rendered):
+            lines.extend(rendered)
         else:
             lines.append("_No extractable text content on this slide._")
         lines.append("")

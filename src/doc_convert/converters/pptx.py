@@ -134,9 +134,13 @@ class PptxConverter(BaseConverter):
         artifacts = FloatingArtifacts()
 
         fig_count = 0
+        filtered_count = 0
         if self.options.figures:
             slide_images = _extract_pptx_images(self.source, self.output_dir)
             figure_map, image_paths, item_refs = _map_images_to_items(doc, slide_images)
+            extracted_count = len(item_refs)
+            figure_map, image_paths, item_refs = self.filter_figures(figure_map, image_paths, item_refs)
+            filtered_count = extracted_count - len(item_refs)
             artifacts.figure_paths = figure_map
             fig_count = len(image_paths)
             artifacts.figure_descriptions = self.describe_figures(
@@ -189,6 +193,7 @@ class PptxConverter(BaseConverter):
             captions_used=self.options.captions_enabled and fig_count > 0,
             desc_count=len(artifacts.figure_descriptions),
             extra_files=(["slides/"] if slide_count > 0 else None),
+            filtered_count=filtered_count,
         )
 
 

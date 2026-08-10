@@ -91,8 +91,12 @@ class PdfConverter(BaseConverter):
         artifacts = FloatingArtifacts()
 
         fig_count = 0
+        filtered_count = 0
         if self.options.figures:
             figure_map, image_paths, item_refs = self.extract_figures_from_doc(doc)
+            extracted_count = len(item_refs)
+            figure_map, image_paths, item_refs = self.filter_figures(figure_map, image_paths, item_refs)
+            filtered_count = extracted_count - len(item_refs)
             artifacts.figure_paths = figure_map
             fig_count = len(figure_map)
             artifacts.figure_descriptions = self.describe_figures(
@@ -129,6 +133,7 @@ class PdfConverter(BaseConverter):
             fig_count=fig_count,
             captions_used=self.options.captions_enabled and (fig_count > 0 or tbl_count > 0),
             desc_count=len(artifacts.figure_descriptions) + len(artifacts.table_descriptions),
+            filtered_count=filtered_count,
         )
 
 

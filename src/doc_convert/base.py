@@ -25,6 +25,14 @@ from doc_convert.output import print_output_summary
 
 logger = logging.getLogger(__name__)
 
+# Stage A of the caption filter cascade: a figure whose native resolution is
+# below this floor on either axis cannot physically carry legible content
+# (chart, photo, diagram), so it is dropped before ever reaching a captioner.
+# Conservative on purpose: real content in the wild is essentially never this
+# small, so this floor should never cut a detail an LLM caption could have
+# described. Disable the whole cascade with --no-caption-filter.
+MIN_FIGURE_SIZE_PX = 64
+
 _FORMAT_NAMES: dict[str, str] = {
     ".pdf": "PDF",
     ".docx": "Word (DOCX)",
@@ -80,6 +88,7 @@ class ConvertOptions:
     llm: str | None = None
     slide_screenshots: bool = True
     slide_vlm: str | None = None
+    caption_filter: bool = True
     settings: Settings = field(default_factory=Settings)
 
     @property
@@ -181,6 +190,136 @@ class BaseConverter(ABC):
         else:
             logger.info("Extracted %d figure(s)", fig_count)
         return figure_map, image_paths, item_refs
+
+    def filter_figures_by_size(
+        self,
+        figure_map: dict[str, str],
+        image_paths: list[Path],
+        item_refs: list[str],
+        *,
+        min_size: int = MIN_FIGURE_SIZE_PX,
+    ) -> tuple[dict[str, str], list[Path], list[str]]:
+        """Drop figures whose native resolution is below ``min_size`` on either axis.
+
+        Stage A of the caption filter cascade (see ``MIN_FIGURE_SIZE_PX``). A
+        dropped figure is removed from ``figure_map`` too, so it never appears
+        in document.md/images.md and is never sent to a captioner. No-op when
+        ``ConvertOptions.caption_filter`` is False (--no-caption-filter).
+
+        Unreadable images are kept (fail-open): we only drop what we can
+        positively confirm is too small, never on an error.
+        """
+        if not self.options.caption_filter:
+            return figure_map, image_paths, item_refs
+
+        from PIL import Image  # noqa: PLC0415
+
+        kept_map: dict[str, str] = {}
+        kept_paths: list[Path] = []
+        kept_refs: list[str] = []
+        size_cache: dict[Path, bool] = {}
+        dropped = 0
+
+        for path, ref in zip(image_paths, item_refs, strict=True):
+            large_enough = size_cache.get(path)
+            if large_enough is None:
+                try:
+                    with Image.open(path) as img:
+                        width, height = img.size
+                    large_enough = width >= min_size and height >= min_size
+                except Exception:
+                    logger.warning("Caption filter: failed to read size of %s, keeping it", path)
+                    large_enough = True
+                size_cache[path] = large_enough
+
+            if large_enough:
+                kept_paths.append(path)
+                kept_refs.append(ref)
+                kept_map[ref] = figure_map[ref]
+            else:
+                dropped += 1
+
+        if dropped:
+            logger.info(
+                "Caption filter: dropped %d figure(s) under %dpx (size floor); %d remain",
+                dropped,
+                min_size,
+                len(kept_paths),
+            )
+        return kept_map, kept_paths, kept_refs
+
+    def filter_figures_by_class(
+        self,
+        figure_map: dict[str, str],
+        image_paths: list[Path],
+        item_refs: list[str],
+    ) -> tuple[dict[str, str], list[Path], list[str]]:
+        """Drop figures the document figure classifier calls purely decorative.
+
+        Stage B1 of the caption filter cascade: docling's own EfficientNet-B0
+        figure classifier labels each image (logo, icon, chart, photograph,
+        ...) and anything in ``DECORATIVE_CATEGORIES`` above
+        ``MIN_CONFIDENCE`` is dropped before it reaches a paid captioner.
+
+        Each distinct file is classified once, even when several items point at
+        it (post exact-hash dedup). Fail-open: an unavailable model or a failed
+        batch yields ``UNKNOWN``, which is never decorative, so nothing is
+        dropped. No-op when ``--no-caption-filter`` is set.
+        """
+        if not self.options.caption_filter or not image_paths:
+            return figure_map, image_paths, item_refs
+
+        from doc_convert.figure_classifier import classify_figures  # noqa: PLC0415
+        from tracing import trace_span  # noqa: PLC0415
+
+        unique_paths = list(dict.fromkeys(image_paths))
+        with trace_span("caption_filter.classify", count=len(unique_paths)):
+            verdicts = classify_figures(unique_paths)
+        verdict_by_path = dict(zip(unique_paths, verdicts, strict=True))
+
+        kept_map: dict[str, str] = {}
+        kept_paths: list[Path] = []
+        kept_refs: list[str] = []
+        dropped_by_label: dict[str, int] = {}
+
+        for path, ref in zip(image_paths, item_refs, strict=True):
+            verdict = verdict_by_path[path]
+            if verdict.is_decorative:
+                dropped_by_label[verdict.label] = dropped_by_label.get(verdict.label, 0) + 1
+                continue
+            kept_paths.append(path)
+            kept_refs.append(ref)
+            kept_map[ref] = figure_map[ref]
+
+        if dropped_by_label:
+            breakdown = ", ".join(f"{label} x{count}" for label, count in sorted(dropped_by_label.items()))
+            logger.info(
+                "Caption filter: dropped %d decorative figure(s) (%s); %d remain",
+                sum(dropped_by_label.values()),
+                breakdown,
+                len(kept_paths),
+            )
+        return kept_map, kept_paths, kept_refs
+
+    def filter_figures(
+        self,
+        figure_map: dict[str, str],
+        image_paths: list[Path],
+        item_refs: list[str],
+    ) -> tuple[dict[str, str], list[Path], list[str]]:
+        """Run the full caption filter cascade before any captioning happens.
+
+        Cheap and certain first, model-based judgement second:
+          Stage A: native size floor (``MIN_FIGURE_SIZE_PX``), free, no model.
+          Stage B1: document figure classifier, drops confident decorative art.
+
+        Dropped figures leave ``figure_map`` entirely, so they never show up in
+        document.md or images.md. Disabled as a whole by ``--no-caption-filter``.
+        """
+        if not self.options.caption_filter:
+            return figure_map, image_paths, item_refs
+        figure_map, image_paths, item_refs = self.filter_figures_by_size(figure_map, image_paths, item_refs)
+        return self.filter_figures_by_class(figure_map, image_paths, item_refs)
 
     def extract_table_images(self, doc: object) -> tuple[list[Path], list[str]]:
         """Render every TableItem as a PNG so the VLM can describe it.
@@ -405,6 +544,7 @@ class BaseConverter(ABC):
         captions_used: bool = False,
         desc_count: int = 0,
         extra_files: list[str] | None = None,
+        filtered_count: int = 0,
     ) -> None:
         print_output_summary(
             self.output_dir,
@@ -413,4 +553,5 @@ class BaseConverter(ABC):
             vlm_used=captions_used,
             desc_count=desc_count,
             extra_files=extra_files,
+            filtered_count=filtered_count,
         )

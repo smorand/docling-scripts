@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from docling_core.types.doc.document import PictureItem
+
 from doc_convert.markdown import (
     FloatingArtifacts,
     _extract_label,
     _find_mention,
     _format_description_block,
     _heading_for,
+    _render_item_lines,
     _shorten_sentence,
     build_pptx_slides_markdown,
     get_pdf_metadata,
@@ -182,3 +185,42 @@ def test_build_pptx_slides_markdown_section_header_offset() -> None:
     md = build_pptx_slides_markdown(doc, FloatingArtifacts(), {}, visual_by_slide={}, notes_by_slide={}, slide_count=1)
     # level defaults to 1 -> "#" * min(1+3, 6) == "####"
     assert "#### Intro" in md
+
+
+def test_picture_item_without_figure_path_disappears() -> None:
+    """A figure dropped by the caption filter (no entry in figure_paths) must
+    produce no output at all: no heading, no description, no dangling link."""
+    item = PictureItem(self_ref="#/pictures/0")
+    lines = _render_item_lines(item, doc=None, ref="#/pictures/0", artifacts=FloatingArtifacts(), contexts={})
+    assert lines == []
+
+
+def test_picture_item_with_figure_path_renders_normally() -> None:
+    """Sanity check: a figure that does have a figure_paths entry still renders as before."""
+    item = PictureItem(self_ref="#/pictures/0")
+    artifacts = FloatingArtifacts(figure_paths={"#/pictures/0": "figures/figure_0.png"})
+    lines = _render_item_lines(item, doc=None, ref="#/pictures/0", artifacts=artifacts, contexts={})
+    joined = "\n".join(lines)
+    assert "#### Figure" in joined
+    assert "figures/figure_0.png" in joined
+
+
+def test_slide_with_only_filtered_figures_gets_placeholder() -> None:
+    """A slide whose every item was dropped by the caption filter must show the
+    placeholder, not a silently empty 'Extracted Content' section (ambiguous for
+    a downstream LLM: blank slide vs failed extraction vs filtered)."""
+    pic = PictureItem(self_ref="#/pictures/0")
+    pic.prov = [_FakeProv(1)]
+    doc = _FakeDoc([pic])
+    md = build_pptx_slides_markdown(
+        doc,
+        FloatingArtifacts(),  # no figure_paths entry -> the figure was filtered
+        {},
+        visual_by_slide={1: "a chart of revenue"},
+        notes_by_slide={},
+        slide_count=1,
+    )
+    assert "_No extractable text content on this slide._" in md
+    # The other two sections must still carry their content.
+    assert "a chart of revenue" in md
+    assert "_No speaker notes._" in md

@@ -59,6 +59,23 @@ def _download_models(preset: str, settings: Settings) -> None:
     console.print(f"[green]Done.[/green] Model available at {target}")
 
 
+def _download_caption_filter_model() -> None:
+    """Warm the Stage B1 figure classifier into the Hugging Face cache.
+
+    Optional: the classifier is lazy-loaded on first real use. Pre-fetching only
+    matters for a machine that will run offline afterwards.
+    """
+    from doc_convert.figure_classifier import prefetch  # noqa: PLC0415
+
+    console.print("Fetching the caption filter figure classifier...")
+    if prefetch():
+        console.print("[green]Done.[/green] Caption filter classifier ready.")
+    else:
+        console.print(
+            "[yellow]Could not fetch the figure classifier; the caption filter will use the size floor only.[/yellow]"
+        )
+
+
 # Heavy enrichment models used by the PDF pipeline when do_chart_extraction
 # or do_formula_enrichment is enabled. We pre-fetch them into the Hugging Face
 # cache so the first conversion that needs them does not stall.
@@ -154,6 +171,15 @@ def main(
         "--no-figures",
         help="Skip figure extraction (text + tables only, faster)",
         show_default="off (figures extracted)",
+    ),
+    no_caption_filter: bool = typer.Option(
+        False,
+        "--no-caption-filter",
+        help=(
+            "Disable the pre-caption filter that drops figures under 64px on either axis "
+            "(logos/icons too small to carry content). Captions every extracted figure."
+        ),
+        show_default="off (filter enabled by default)",
     ),
     no_slide_screenshots: bool = typer.Option(
         False,
@@ -383,6 +409,7 @@ def main(
             no_ocr=no_ocr,
             ocr_model=ocr_model,
             no_figures=no_figures,
+            no_caption_filter=no_caption_filter,
             no_slide_screenshots=no_slide_screenshots,
             slide_vlm=slide_vlm,
             cpu=cpu,
@@ -467,6 +494,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
     no_ocr: bool,
     ocr_model: str | None,
     no_figures: bool,
+    no_caption_filter: bool,
     no_slide_screenshots: bool,
     slide_vlm: str | None,
     cpu: bool,
@@ -492,6 +520,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
     if download_models:
         preset = captions if (captions and "/" not in captions and captions != "off") else DEFAULT_LOCAL_PRESET
         _download_models(preset, Settings())
+        _download_caption_filter_model()
     if download_enrichments:
         _download_enrichments()
     if download_models or download_enrichments:
@@ -752,6 +781,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             llm=llm,
             slide_screenshots=not no_slide_screenshots,
             slide_vlm=slide_vlm,
+            caption_filter=not no_caption_filter,
             settings=settings,
         )
 
@@ -777,6 +807,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                 llm=resolve_image_llm(llm),
                 slide_screenshots=not no_slide_screenshots,
                 slide_vlm=slide_vlm,
+                caption_filter=not no_caption_filter,
                 settings=settings,
             )
             converter = ImageConverter(doc_path, options)

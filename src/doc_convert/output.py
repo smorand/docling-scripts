@@ -17,13 +17,20 @@ def print_output_summary(
     vlm_used: bool = False,
     desc_count: int = 0,
     extra_files: list[str] | None = None,
+    filtered_count: int = 0,
 ) -> None:
-    """Print a consistent output summary."""
+    """Print a consistent output summary.
+
+    ``filtered_count`` is the number of figures the caption filter dropped:
+    their PNG stays in ``figures/`` for auditing but they are absent from
+    document.md and were never sent to a captioner.
+    """
     console.print(f"[green]Output:[/green] {output_dir}/")
     console.print("  document.md")
-    if fig_count > 0:
+    if fig_count > 0 or filtered_count > 0:
         console.print("  images.md")
-        console.print(f"  figures/     ({fig_count} figure(s))")
+        suffix = f", {filtered_count} filtered out" if filtered_count else ""
+        console.print(f"  figures/     ({fig_count} figure(s){suffix})")
         if vlm_used:
             console.print(f"  VLM descriptions: {desc_count}/{fig_count}")
     for f in extra_files or []:
