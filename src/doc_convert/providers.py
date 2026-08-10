@@ -246,9 +246,23 @@ DEFAULT_PPTX_SLIDE_VLM = "ibm/claude-sonnet-4-6"
 
 # How many slide screenshots are analysed at once by the PPTX visual pass. Each
 # call is an independent ~20 s HTTPS round trip, so a 52-slide deck used to
-# spend ~18 minutes waiting one request at a time. 4 cuts that ~4x while
-# staying well clear of provider rate limits.
-DEFAULT_SLIDE_CONCURRENCY = 4
+# spend ~18 minutes waiting one request at a time.
+#
+# 8 is the last value measured to scale cleanly on IBM ICA. Cold-cache runs on
+# never-analysed client decks, comparing wall clock against total request time:
+#
+#   workers  slides  speedup  latency/call
+#         4      55    3.96x        21.0 s
+#         6      41    5.60x        22.0 s
+#         8      31    7.50x        20.1 s
+#         8      52    7.70x        20.8 s   <- sustained load, still flat
+#        12      29    9.20x        27.5 s   <- saturation: +37% per call
+#
+# Per-call latency stays flat up to 8 (so the provider is not throttling) and
+# inflates sharply at 12 while marginal throughput collapses (+50% workers for
+# +23% output). No retries were triggered at any level, but transient failures
+# are retried anyway (see pptx_slide_vlm), so a bad day costs time, not content.
+DEFAULT_SLIDE_CONCURRENCY = 8
 
 # Default model for image conversion when the input itself is an image and the
 # user did not pass --llm. Images always go through the external VLM pipeline,

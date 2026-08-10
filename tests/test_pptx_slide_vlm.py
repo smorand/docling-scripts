@@ -18,6 +18,7 @@ from config import Settings
 from doc_convert.pptx_slide_vlm import (
     _MAX_SLIDE_ATTEMPTS,
     DEFAULT_PPTX_SLIDE_VLM,
+    DEFAULT_SLIDE_CONCURRENCY,
     _analyze_single_slide,
     _analyze_single_slide_with_retry,
     _normalize_heading_levels,
@@ -427,3 +428,12 @@ def test_successful_response_returns_description(tmp_path: Path, ibm_settings: S
     attempt = _analyze_single_slide(img, "ibm", "m", ibm_settings, "key", client)
     assert attempt.description == "a bar chart of revenue"
     assert attempt.retryable is False
+
+
+def test_default_concurrency_is_the_measured_knee() -> None:
+    """8 is not arbitrary: it is the last worker count measured to scale cleanly
+    on IBM ICA (7.7x on a 52-slide deck with per-call latency still ~20 s, while
+    12 inflates it to 27.5 s). See the table in providers.py. Changing this
+    without a fresh cold-cache measurement is a regression waiting to happen.
+    """
+    assert DEFAULT_SLIDE_CONCURRENCY == 8

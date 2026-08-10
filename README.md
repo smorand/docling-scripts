@@ -37,15 +37,25 @@ All conversions write to a `<name>_docling/` directory with `document.md` as the
 
 ### Slide analysis is parallel
 
-On a big deck the PPTX visual pass dominates everything else: one API call per slide, ~21 s each. 55 slides one at a time is ~19 minutes of pure network waiting. Those calls are independent, so they now run `--slide-concurrency` at a time (default 4).
+On a big deck the PPTX visual pass dominates everything else: one API call per slide, ~21 s each. 55 slides one at a time is ~19 minutes of pure network waiting. Those calls are independent, so they now run `--slide-concurrency` at a time (default 8).
 
-Measured on a 55-slide client deck, cold cache, single run: **292 s of wall clock for 1156 s of request time, a 3.96x speedup** (19.3 min → 4.9 min). Every run logs its own ratio:
+Measured on a 52-slide client deck, cold cache, single run: **141 s of wall clock for 1084 s of request time, a 7.7x speedup** (18 min → 2.4 min). Every run logs its own ratio:
 
 ```
-Slide analysis: 292s wall clock for 1156s of request time (4.0x from 4 workers)
+Slide analysis: 141s wall clock for 1084s of request time (7.7x from 8 workers)
 ```
 
-Raise it if your provider tolerates more (8 measured clean, 5.0x on a 10-slide deck), lower it if you get rate-limited, `--slide-concurrency 1` restores the old sequential behaviour. Because concurrency makes rate limits likelier, a slide that hits a transient failure (429, 5xx, read timeout, empty completion) is now retried with backoff instead of silently losing its analysis.
+The default is 8 because that is the last value measured to scale cleanly, on cold-cache runs against never-analysed decks:
+
+| workers | slides | speedup | latency/call |
+|---|---|---|---|
+| 4 | 55 | 3.96x | 21.0 s |
+| 6 | 41 | 5.60x | 22.0 s |
+| 8 | 31 | 7.50x | 20.1 s |
+| 8 | 52 | 7.70x | 20.8 s |
+| 12 | 29 | 9.20x | 27.5 s |
+
+Per-call latency stays flat through 8, so the provider is not throttling. At 12 it inflates 37% and the marginal return collapses (50% more workers for 23% more output). Lower it if your provider rate-limits you; `--slide-concurrency 1` restores the old sequential behaviour. Because concurrency makes rate limits likelier, a slide that hits a transient failure (429, 5xx, read timeout, empty completion) is now retried with backoff instead of silently losing its analysis.
 
 Threads are safe on this path specifically: it makes plain `httpx` calls (documented thread-safe) and touches no docling pipeline, no torch, and no global state. The figure captioner is deliberately **not** parallelised, because it runs through docling's `DocumentConverter` and installs a global monkeypatch.
 
