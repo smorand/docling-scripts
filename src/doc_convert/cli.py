@@ -24,6 +24,7 @@ from doc_convert.output import make_document_symlink, resolve_output_dir
 from doc_convert.output_guard import cleanup_pending as _cleanup_outputs
 from doc_convert.output_guard import install_signal_handlers as _install_signal_handlers
 from doc_convert.output_guard import register as _register_output
+from doc_convert.providers import DEFAULT_SLIDE_CONCURRENCY
 from logging_config import console, setup_logging
 from tracing import configure_tracing
 
@@ -198,6 +199,16 @@ def main(
             "screenshot. Precedence: --slide-vlm > --llm > default."
         ),
         show_default="ibm/claude-sonnet-4-6",
+    ),
+    slide_concurrency: int = typer.Option(
+        DEFAULT_SLIDE_CONCURRENCY,
+        "--slide-concurrency",
+        min=1,
+        help=(
+            "PPTX only: how many slide screenshots to analyze at once. Each slide is an "
+            "independent API call, so this cuts the dominant cost on big decks almost "
+            "linearly. Lower it if the provider rate-limits you; 1 restores sequential."
+        ),
     ),
     companion_llm: str | None = typer.Option(
         None,
@@ -412,6 +423,7 @@ def main(
             no_caption_filter=no_caption_filter,
             no_slide_screenshots=no_slide_screenshots,
             slide_vlm=slide_vlm,
+            slide_concurrency=slide_concurrency,
             cpu=cpu,
             all_formats=all_formats,
             start_audio=start_audio,
@@ -497,6 +509,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
     no_caption_filter: bool,
     no_slide_screenshots: bool,
     slide_vlm: str | None,
+    slide_concurrency: int,
     cpu: bool,
     all_formats: bool,
     start_audio: bool,
@@ -780,6 +793,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             llm=llm,
             slide_screenshots=not no_slide_screenshots,
             slide_vlm=slide_vlm,
+            slide_concurrency=slide_concurrency,
             caption_filter=not no_caption_filter,
             settings=settings,
         )
@@ -806,6 +820,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                 llm=resolve_image_llm(llm),
                 slide_screenshots=not no_slide_screenshots,
                 slide_vlm=slide_vlm,
+                slide_concurrency=slide_concurrency,
                 caption_filter=not no_caption_filter,
                 settings=settings,
             )

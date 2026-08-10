@@ -23,7 +23,9 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,7 +33,15 @@ import httpx
 import typer
 
 from config import Settings  # noqa: TC001
-from doc_convert.providers import DEFAULT_PPTX_SLIDE_VLM, get_provider_url, parse_external_llm, require_api_key
+from doc_convert.providers import (
+    DEFAULT_PPTX_SLIDE_VLM,
+    DEFAULT_SLIDE_CONCURRENCY,
+    RETRY_BACKOFF_SECONDS,
+    RETRYABLE_HTTP_STATUS,
+    get_provider_url,
+    parse_external_llm,
+    require_api_key,
+)
 from logging_config import console
 
 logger = logging.getLogger(__name__)
@@ -44,6 +54,16 @@ _SOFFICE_TIMEOUT_SECONDS = 300
 
 # HTTP status meaning "model slug not found/served" on the OpenAI-compatible endpoint.
 _HTTP_NOT_FOUND = 404
+
+# Threads are safe on this path because it touches no docling pipeline, no torch
+# and no global state: httpx.Client is documented as thread-safe, and image_prep
+# writes its temporaries through tempfile.mkstemp. The default worker count
+# lives in providers.py next to the other provider-facing defaults.
+
+# Concurrency raises the odds of hitting a rate limit, and before retries a
+# single 429 silently dropped that slide's analysis from document.md. Retry
+# transient statuses so parallelism cannot degrade output quality.
+_MAX_SLIDE_ATTEMPTS = 4
 
 _SLIDE_ANALYSIS_PROMPT = (
     "You are analyzing a screenshot of a single PowerPoint slide, rendered exactly "
@@ -90,6 +110,15 @@ def _normalize_heading_levels(text: str, min_level: int = 4) -> str:
         if m and len(m.group(1)) < min_level:
             lines[i] = "#" * min_level + line[len(m.group(1)) :]
     return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class _SlideAttempt:
+    """Outcome of one slide analysis call."""
+
+    description: str = ""
+    retryable: bool = False
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -174,31 +203,89 @@ def analyze_slide_images(
     settings: Settings,
     *,
     llm: str = DEFAULT_PPTX_SLIDE_VLM,
+    concurrency: int = DEFAULT_SLIDE_CONCURRENCY,
 ) -> dict[int, SlideVisualAnalysis]:
-    """Send each rendered slide screenshot to the VLM for a visual interpretation."""
+    """Send each rendered slide screenshot to the VLM for a visual interpretation.
+
+    Slides are analysed ``concurrency`` at a time (see
+    ``DEFAULT_SLIDE_CONCURRENCY``). Results are keyed by slide number, so the
+    completion order never affects the assembled document. A slide that fails
+    every retry is simply absent from the result, exactly as before.
+    """
     provider, model = parse_external_llm(llm)
     api_key = require_api_key(provider, settings)
 
-    total = len(image_paths_by_slide)
-    logger.info("Analyzing %d slide screenshot(s) with %s/%s", total, provider, model)
+    pending: list[tuple[int, str]] = []
+    for slide_number, rel_path in sorted(image_paths_by_slide.items()):
+        if (output_dir / rel_path).exists():
+            pending.append((slide_number, rel_path))
+        else:
+            logger.warning("Slide screenshot not found, skipping: %s", output_dir / rel_path)
+
+    if not pending:
+        return {}
+
+    total = len(pending)
+    workers = max(1, min(concurrency, total))
+    logger.info(
+        "Analyzing %d slide screenshot(s) with %s/%s (%d at a time)",
+        total,
+        provider,
+        model,
+        workers,
+    )
+
     analyses: dict[int, SlideVisualAnalysis] = {}
-    with httpx.Client(timeout=settings.llm_timeout) as client:
-        for i, (slide_number, rel_path) in enumerate(sorted(image_paths_by_slide.items()), 1):
-            logger.info("Analyzing slide %d/%d (slide %d)", i, total, slide_number)
-            img_path = output_dir / rel_path
-            if not img_path.exists():
-                logger.warning("Slide screenshot not found, skipping: %s", img_path)
-                continue
-            description = _analyze_single_slide(img_path, provider, model, settings, api_key, client)
-            if not description:
-                logger.warning("Skipping slide %d visual analysis (API error)", slide_number)
-                continue
-            analyses[slide_number] = SlideVisualAnalysis(
-                slide_number=slide_number,
-                image_path=rel_path,
-                description=_normalize_heading_levels(description.strip()),
+    # Cap the connection pool to the worker count: no reason to hold more
+    # sockets open against the provider than we can actually use.
+    limits = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
+    with httpx.Client(timeout=settings.llm_timeout, limits=limits) as client:
+
+        def work(item: tuple[int, str]) -> tuple[int, str, str, float]:
+            slide_number, rel_path = item
+            started = time.monotonic()
+            description = _analyze_single_slide_with_retry(
+                output_dir / rel_path, provider, model, settings, api_key, client
             )
-    return analyses
+            return slide_number, rel_path, description, time.monotonic() - started
+
+        wall_started = time.monotonic()
+        busy_seconds = 0.0
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="slide-vlm") as pool:
+            futures = {pool.submit(work, item): item[0] for item in pending}
+            try:
+                for done_count, future in enumerate(as_completed(futures), 1):
+                    slide_number, rel_path, description, elapsed = future.result()
+                    busy_seconds += elapsed
+                    if not description:
+                        logger.warning("Skipping slide %d visual analysis (API error)", slide_number)
+                        continue
+                    analyses[slide_number] = SlideVisualAnalysis(
+                        slide_number=slide_number,
+                        image_path=rel_path,
+                        description=_normalize_heading_levels(description.strip()),
+                    )
+                    logger.info("Analyzed slide %d in %.1fs (%d/%d done)", slide_number, elapsed, done_count, total)
+            except BaseException:
+                # A fatal error (e.g. typer.Exit on an unknown model slug) must not
+                # wait for every queued slide to run first.
+                for future in futures:
+                    future.cancel()
+                raise
+
+    wall_seconds = time.monotonic() - wall_started
+    # busy_seconds is what the same calls would have cost one at a time, so the
+    # ratio is the speedup actually obtained on this deck and this provider.
+    logger.info(
+        "Slide analysis: %.0fs wall clock for %.0fs of request time (%.1fx from %d workers)",
+        wall_seconds,
+        busy_seconds,
+        busy_seconds / wall_seconds if wall_seconds > 0 else 1.0,
+        workers,
+    )
+
+    # Sorted for readability in logs/debugging; lookups are by key anyway.
+    return {number: analyses[number] for number in sorted(analyses)}
 
 
 def build_slide_render_artifacts(
@@ -207,13 +294,16 @@ def build_slide_render_artifacts(
     settings: Settings,
     *,
     llm: str = DEFAULT_PPTX_SLIDE_VLM,
+    concurrency: int = DEFAULT_SLIDE_CONCURRENCY,
 ) -> SlideRenderArtifacts:
     """Render slides, run the VLM visual analysis, and extract speaker notes."""
     # Resolve to absolute path immediately so that relative paths stay valid
     # regardless of any cwd changes during the conversion pipeline.
     output_dir = output_dir.resolve()
     image_paths_by_slide = render_pptx_slides(pptx_path, output_dir)
-    analyses_by_slide = analyze_slide_images(image_paths_by_slide, output_dir, settings, llm=llm)
+    analyses_by_slide = analyze_slide_images(
+        image_paths_by_slide, output_dir, settings, llm=llm, concurrency=concurrency
+    )
     notes_by_slide = extract_slide_notes(pptx_path)
     hidden_slides = extract_hidden_slide_numbers(pptx_path)
     return SlideRenderArtifacts(
@@ -274,7 +364,7 @@ def _pptx_to_pdf(pptx_path: Path, workdir: Path) -> Path:
     return pdf_path
 
 
-def _analyze_single_slide(
+def _analyze_single_slide_with_retry(
     image_path: Path,
     provider: str,
     model: str,
@@ -282,33 +372,81 @@ def _analyze_single_slide(
     api_key: str,
     client: httpx.Client,
 ) -> str:
+    """Analyse one slide, retrying transient failures with backoff.
+
+    Returns "" when every attempt failed, which the caller turns into "this
+    slide has no visual interpretation" rather than aborting the deck. Fatal
+    conditions (unknown model slug) still raise out of here immediately.
+    """
+    for attempt in range(1, _MAX_SLIDE_ATTEMPTS + 1):
+        status = _analyze_single_slide(image_path, provider, model, settings, api_key, client)
+        if status.description:
+            return status.description
+        last_attempt = attempt == _MAX_SLIDE_ATTEMPTS
+        if not status.retryable or last_attempt:
+            if status.retryable:
+                logger.warning(
+                    "Slide %s still failing after %d attempts, giving up",
+                    image_path.name,
+                    _MAX_SLIDE_ATTEMPTS,
+                )
+            return ""
+        wait = RETRY_BACKOFF_SECONDS[min(attempt - 1, len(RETRY_BACKOFF_SECONDS) - 1)]
+        logger.warning(
+            "Slide %s attempt %d/%d failed (%s), retrying in %.0fs",
+            image_path.name,
+            attempt,
+            _MAX_SLIDE_ATTEMPTS,
+            status.reason,
+            wait,
+        )
+        time.sleep(wait)
+    return ""
+
+
+def _analyze_single_slide(
+    image_path: Path,
+    provider: str,
+    model: str,
+    settings: Settings,
+    api_key: str,
+    client: httpx.Client,
+) -> _SlideAttempt:
     from doc_convert.image_prep import ensure_image_under_limit  # noqa: PLC0415
 
     with ensure_image_under_limit(image_path) as prepared:
         raw = prepared.path.read_bytes()
         mime = "image/jpeg" if prepared.path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
         b64 = base64.b64encode(raw).decode()
-    resp = client.post(
-        get_provider_url(provider, settings),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": _SLIDE_ANALYSIS_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Analyze this PowerPoint slide screenshot in detail."},
-                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
-                    ],
-                },
-            ],
-            "max_tokens": settings.llm_max_tokens,
-        },
-    )
+    try:
+        resp = client.post(
+            get_provider_url(provider, settings),
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _SLIDE_ANALYSIS_PROMPT},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Analyze this PowerPoint slide screenshot in detail."},
+                            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                        ],
+                    },
+                ],
+                "max_tokens": settings.llm_max_tokens,
+            },
+        )
+    except httpx.HTTPError as exc:
+        # Transport-level failure (read timeout, connection reset): transient,
+        # and more likely now that several requests share one client.
+        return _SlideAttempt(retryable=True, reason=type(exc).__name__)
+
     if resp.status_code == _HTTP_NOT_FOUND:
         console.print(f"[red]Model not found for PPTX slide analysis: {provider}/{model}[/red]")
         raise typer.Exit(1)
+    if resp.status_code in RETRYABLE_HTTP_STATUS:
+        return _SlideAttempt(retryable=True, reason=f"HTTP {resp.status_code}")
     if not resp.is_success:
         logger.warning(
             "Slide analysis API error %d for %s (body: %.200s) -- skipping slide",
@@ -316,6 +454,14 @@ def _analyze_single_slide(
             image_path.name,
             resp.text,
         )
-        return ""
-    content: str = resp.json()["choices"][0]["message"]["content"]
-    return content
+        return _SlideAttempt(reason=f"HTTP {resp.status_code}")
+
+    try:
+        content: str = resp.json()["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, ValueError) as exc:
+        logger.warning("Slide analysis returned an unusable body for %s: %s", image_path.name, exc)
+        return _SlideAttempt(reason="malformed response")
+    if not content.strip():
+        # Some providers return an empty candidate under load; worth one retry.
+        return _SlideAttempt(retryable=True, reason="empty response")
+    return _SlideAttempt(description=content)

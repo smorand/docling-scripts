@@ -16,6 +16,7 @@ from typing import Any, cast
 
 import httpx
 
+from doc_convert.providers import RETRY_BACKOFF_SECONDS, RETRYABLE_HTTP_STATUS
 from tracing import trace_span
 
 logger = logging.getLogger(__name__)
@@ -34,14 +35,13 @@ _GEMINI_MAX_ATTEMPTS = 3
 # standard 504/522/408 variants gateways emit for the same condition).
 _GATEWAY_TIMEOUT_CODES = frozenset({408, 504, 522, 524})
 
-# Transient upstream failures. IBM ICA's gateway intermittently returns a flaky
-# 502 Bad Gateway / 503 / 429 (and the timeout codes) that succeed on retry;
-# these are NOT payload problems. A 502 on a small part is transient, not "too
+# Transient upstream failures, shared with the other provider call paths (see
+# providers.RETRYABLE_HTTP_STATUS). A 502 on a small part is transient, not "too
 # large" (part 1 of a recording succeeds, part 2 of the same size 502s, then
 # retries fine). We retry these with exponential backoff before failing.
-_RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 520, 522, 524})
+_RETRYABLE_STATUS = RETRYABLE_HTTP_STATUS
 _MAX_MEDIA_ATTEMPTS = 4
-_RETRY_BACKOFF_SECONDS = (5.0, 15.0, 45.0)
+_RETRY_BACKOFF_SECONDS = RETRY_BACKOFF_SECONDS
 # A raw payload above this genuinely exceeds the inline base64 ceiling (~75 MB
 # base64 ≈ ~56 MB raw, measured against IBM ICA). A 502/413 here really IS "too
 # large" and retrying cannot help, so we fail fast and point at google/.

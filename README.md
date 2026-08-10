@@ -35,6 +35,22 @@ All conversions write to a `<name>_docling/` directory with `document.md` as the
 - `--ocr-model <value>` — OCR engine for the `--engine local` PDF pipeline. OCR is the per-region "text from bitmap" stage; it only fires on scanned/image content, so born-digital PDFs are unaffected (and incur no LLM cost even with the LLM default). Value is `off` (alias for `--no-ocr`), `local` (Tesseract CLI via the system `tesseract` binary), or a `provider/model` slug to read each image region with a cloud LLM. **Default: `ibm/gemini-3.1-pro-preview`** (IBM ICA fronts Gemini, so no separate `GOOGLE_API_KEY` is needed; per-region crops go inline, so the missing Files API on `ibm/` is irrelevant here). Unlike `--captions`, it does **not** auto-inherit `--llm`. For fully-scanned documents prefer `--engine llm` (reads whole pages); LLM OCR shines on mostly-digital docs with small embedded image-text. The `local` engine needs the `tesseract` binary, plus language packs (`brew install tesseract-lang`) for anything beyond the bundled `eng`.
 - `--no-caption-filter` — turns off the caption filter, which is **on by default** and skips figures that cannot carry information before any captioner is paid. Two stages: a native size floor (anything under 64px on either axis) and docling's own figure classifier, which drops confidently decorative artwork (`logo`, `icon`, `qr_code`, `bar_code`, `stamp`, `signature` at ≥0.8 confidence). Skipped figures disappear from `document.md` and `images.md`; their PNG stays in `figures/` so you can audit what was filtered. On real client decks this removes 25-56% of caption calls (corporate and vendor logos, pictograms) with no content loss. Everything fails open: an unreadable image, a missing model, or a hesitant classification means "caption it anyway". See [Caption filter](#caption-filter).
 
+### Slide analysis is parallel
+
+On a big deck the PPTX visual pass dominates everything else: one API call per slide, ~21 s each. 55 slides one at a time is ~19 minutes of pure network waiting. Those calls are independent, so they now run `--slide-concurrency` at a time (default 4).
+
+Measured on a 55-slide client deck, cold cache, single run: **292 s of wall clock for 1156 s of request time, a 3.96x speedup** (19.3 min → 4.9 min). Every run logs its own ratio:
+
+```
+Slide analysis: 292s wall clock for 1156s of request time (4.0x from 4 workers)
+```
+
+Raise it if your provider tolerates more (8 measured clean, 5.0x on a 10-slide deck), lower it if you get rate-limited, `--slide-concurrency 1` restores the old sequential behaviour. Because concurrency makes rate limits likelier, a slide that hits a transient failure (429, 5xx, read timeout, empty completion) is now retried with backoff instead of silently losing its analysis.
+
+Threads are safe on this path specifically: it makes plain `httpx` calls (documented thread-safe) and touches no docling pipeline, no torch, and no global state. The figure captioner is deliberately **not** parallelised, because it runs through docling's `DocumentConverter` and installs a global monkeypatch.
+
+> Note when benchmarking: the provider caches identical requests. Re-running the same deck returns byte-identical analyses in a fraction of the time, so always compare on a deck that has never been analysed, or trust the logged ratio above (measured within a single run).
+
 ### Caption filter
 
 Slide decks are full of artwork that costs a caption call and returns nothing: the company logo on every slide, partner logos, arrow and gear pictograms. Exact-duplicate images were already deduplicated by content hash, but the same logo re-exported at a slightly different size is a *different* file, so hashing never caught it.

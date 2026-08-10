@@ -205,6 +205,17 @@ PROVIDER_URLS: dict[str, str] = {
 
 SUPPORTED_PROVIDERS: tuple[str, ...] = ("google", "openrouter", "ibm")
 
+# Transient upstream failures worth retrying, shared by every caller that talks
+# to a provider (media payloads, PPTX slide screenshots). IBM ICA's gateway
+# intermittently returns a flaky 502/503/429 (and the timeout codes) that
+# succeeds on retry; these are not payload problems. Single source of truth so
+# one call path cannot drift from another.
+RETRYABLE_HTTP_STATUS: frozenset[int] = frozenset({408, 429, 500, 502, 503, 504, 520, 522, 524})
+
+# Backoff schedule for the retries above; attempt k waits schedule[k-1], with
+# the last value reused for any further attempt.
+RETRY_BACKOFF_SECONDS: tuple[float, ...] = (5.0, 15.0, 45.0)
+
 # Video default uses google/ (Gemini Files API: upload → generate), which has no
 # payload size limit. Inline-base64 providers (ibm/, openrouter/) fail with 502
 # on large video. gemini-3-pro-preview was retired on the Google API ("no longer
@@ -232,6 +243,12 @@ DEFAULT_COMPANION_LLM = "ibm/gemini-3.1-pro-preview"
 # (see pptx_slide_vlm.py). Confirmed available via IBM ICA's GET /models:
 # 'claude-sonnet-4-6' is listed alongside claude-sonnet-4-5/claude-opus-4-8.
 DEFAULT_PPTX_SLIDE_VLM = "ibm/claude-sonnet-4-6"
+
+# How many slide screenshots are analysed at once by the PPTX visual pass. Each
+# call is an independent ~20 s HTTPS round trip, so a 52-slide deck used to
+# spend ~18 minutes waiting one request at a time. 4 cuts that ~4x while
+# staying well clear of provider rate limits.
+DEFAULT_SLIDE_CONCURRENCY = 4
 
 # Default model for image conversion when the input itself is an image and the
 # user did not pass --llm. Images always go through the external VLM pipeline,

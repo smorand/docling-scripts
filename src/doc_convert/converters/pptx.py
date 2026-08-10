@@ -160,7 +160,11 @@ class PptxConverter(BaseConverter):
             with trace_span("pptx.slide_screenshots", file=self.source.name, llm=slide_vlm):
                 logger.info("Rendering slide screenshots and analyzing with %s", slide_vlm)
                 render_artifacts = build_slide_render_artifacts(
-                    self.source, self.output_dir, self.options.settings, llm=slide_vlm
+                    self.source,
+                    self.output_dir,
+                    self.options.settings,
+                    llm=slide_vlm,
+                    concurrency=self.options.slide_concurrency,
                 )
             slide_count = len(render_artifacts.image_paths_by_slide)
             visual_by_slide = {n: a.description for n, a in render_artifacts.analyses_by_slide.items()}
