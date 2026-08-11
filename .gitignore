@@ -48,6 +48,7 @@ coverage.xml
 
 # Local agent state
 .claude/
+.pi-subagents/
 
 
 # Smoke test outputs (not for version control)
