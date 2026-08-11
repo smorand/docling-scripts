@@ -40,9 +40,25 @@ DECORATIVE_CATEGORIES: frozenset[str] = frozenset(
     }
 )
 
-# Minimum softmax confidence before a figure is skipped. Below it the
-# classifier is hesitating, so we keep the figure and let the captioner decide.
-MIN_CONFIDENCE = 0.8
+# Minimum *combined* probability over DECORATIVE_CATEGORIES before a figure is
+# skipped. Thresholding the single top label instead was leaving obvious logos
+# captioned, because the classifier splits its mass between `logo` and `icon`
+# for the same picture: the IBM DB2 wordmark scored logo 0.35 / icon 0.34, so a
+# top-1 rule at 0.8 kept it while the two together say 0.69 "decorative". Summing
+# them measures the question we actually ask, "is this decorative", instead of
+# "which kind of decorative is it".
+#
+# 0.80 is set from the 152 figures of a real 98-slide deck, all inspected by eye:
+#
+#   content misread as decorative   0.490 - 0.658  (a headshot, two editorial
+#                                                   illustrations, two 3D renders)
+#   vendor logos and pictograms     0.575 - 1.000
+#
+# So 0.80 clears the highest content item by 0.14. It also strictly contains the
+# old top-1 rule (the top label is part of the sum), verified on that deck: 51
+# classifier drops became 86 with nothing un-dropped, and all 35 additions were
+# confirmed by eye to be pictograms, avatars or vendor logos.
+MIN_DECORATIVE_MASS = 0.80
 
 # Used only if docling's model spec cannot be read (API drift).
 _FALLBACK_REPO_ID = "docling-project/DocumentFigureClassifier-v2.5"
@@ -60,15 +76,21 @@ _BATCH_SIZE_CPU = 8
 
 @dataclass(frozen=True)
 class FigureClass:
-    """One classifier verdict for one figure."""
+    """One classifier verdict for one figure.
+
+    ``label``/``confidence`` are the top prediction, kept for logging and
+    diagnostics. ``decorative_mass`` is what the decision uses: the probability
+    summed over every decorative category.
+    """
 
     label: str
     confidence: float
+    decorative_mass: float = 0.0
 
     @property
     def is_decorative(self) -> bool:
         """True when this figure can be skipped without losing information."""
-        return self.label in DECORATIVE_CATEGORIES and self.confidence >= MIN_CONFIDENCE
+        return self.decorative_mass >= MIN_DECORATIVE_MASS
 
 
 #: Verdict used whenever classification could not run. Never decorative, so a
@@ -190,9 +212,11 @@ def _forward(state: _Loaded, images: list[Any]) -> list[FigureClass]:
     probs = logits.float().softmax(dim=-1)
     confidences, indices = probs.max(dim=-1)
     id2label = state.model.config.id2label
+    decorative_columns = [i for i, label in id2label.items() if str(label) in DECORATIVE_CATEGORIES]
+    masses = probs[:, decorative_columns].sum(dim=-1)
     return [
-        FigureClass(label=str(id2label[int(idx)]), confidence=float(conf))
-        for idx, conf in zip(indices.tolist(), confidences.tolist(), strict=True)
+        FigureClass(label=str(id2label[int(idx)]), confidence=float(conf), decorative_mass=float(mass))
+        for idx, conf, mass in zip(indices.tolist(), confidences.tolist(), masses.tolist(), strict=True)
     ]
 
 

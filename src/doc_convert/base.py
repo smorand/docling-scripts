@@ -260,8 +260,9 @@ class BaseConverter(ABC):
 
         Stage B1 of the caption filter cascade: docling's own EfficientNet-B0
         figure classifier labels each image (logo, icon, chart, photograph,
-        ...) and anything in ``DECORATIVE_CATEGORIES`` above
-        ``MIN_CONFIDENCE`` is dropped before it reaches a paid captioner.
+        ...) and anything whose summed probability over ``DECORATIVE_CATEGORIES``
+        reaches
+        ``MIN_DECORATIVE_MASS`` is dropped before it reaches a paid captioner.
 
         Each distinct file is classified once, even when several items point at
         it (post exact-hash dedup). Fail-open: an unavailable model or a failed

@@ -34,18 +34,26 @@ def _make_png(path: Path, width: int = 200, height: int = 200) -> Path:
 
 
 @pytest.mark.parametrize("label", sorted(fc.DECORATIVE_CATEGORIES))
-def test_decorative_label_above_threshold_is_dropped(label: str) -> None:
-    assert fc.FigureClass(label=label, confidence=0.95).is_decorative
+def test_decorative_mass_above_threshold_is_dropped(label: str) -> None:
+    assert fc.FigureClass(label=label, confidence=0.95, decorative_mass=0.95).is_decorative
 
 
 @pytest.mark.parametrize("label", sorted(fc.DECORATIVE_CATEGORIES))
-def test_decorative_label_below_threshold_is_kept(label: str) -> None:
+def test_decorative_mass_below_threshold_is_kept(label: str) -> None:
     """A hesitating classifier must not cause a drop."""
-    assert not fc.FigureClass(label=label, confidence=fc.MIN_CONFIDENCE - 0.01).is_decorative
+    assert not fc.FigureClass(label=label, confidence=0.5, decorative_mass=fc.MIN_DECORATIVE_MASS - 0.01).is_decorative
 
 
 def test_exactly_at_threshold_is_dropped() -> None:
-    assert fc.FigureClass(label="logo", confidence=fc.MIN_CONFIDENCE).is_decorative
+    assert fc.FigureClass(label="logo", confidence=0.5, decorative_mass=fc.MIN_DECORATIVE_MASS).is_decorative
+
+
+def test_split_mass_between_logo_and_icon_still_drops() -> None:
+    """The rule this replaced: the IBM DB2 wordmark scored logo 0.35 / icon 0.34,
+    so a top-1 threshold at 0.8 kept it even though the classifier was 69% sure
+    it was decorative. Summing the decorative categories is the whole point."""
+    verdict = fc.FigureClass(label="logo", confidence=0.35, decorative_mass=0.85)
+    assert verdict.is_decorative, "a confident sum must drop even with a timid top-1"
 
 
 @pytest.mark.parametrize(
@@ -53,13 +61,23 @@ def test_exactly_at_threshold_is_dropped() -> None:
     ["photograph", "bar_chart", "line_chart", "pie_chart", "table", "flow_chart", "screenshot_from_computer", "other"],
 )
 def test_content_labels_are_never_dropped(label: str) -> None:
-    """Even at maximum confidence, content categories are always captioned."""
-    assert not fc.FigureClass(label=label, confidence=1.0).is_decorative
+    """A content top-1 leaves little mass for the decorative classes, so the sum
+    stays below the threshold and the figure is captioned."""
+    assert not fc.FigureClass(label=label, confidence=1.0, decorative_mass=0.0).is_decorative
+
+
+def test_measured_separation_band_is_respected() -> None:
+    """On the deck this threshold was set from, content misread as decorative
+    topped out at 0.658 and vendor logos started at 0.575. The threshold must sit
+    above the content band so no measured content item would be dropped."""
+    assert fc.MIN_DECORATIVE_MASS > 0.658
+    assert not fc.FigureClass(label="logo", confidence=0.41, decorative_mass=0.658).is_decorative
 
 
 def test_unknown_is_never_decorative() -> None:
     """The failure verdict must always mean 'keep and caption'."""
     assert not fc.UNKNOWN.is_decorative
+    assert fc.UNKNOWN.decorative_mass == 0.0
 
 
 def test_other_category_is_not_decorative() -> None:
@@ -228,8 +246,8 @@ def test_filter_by_class_drops_decorative_only(monkeypatch: pytest.MonkeyPatch, 
     logo = _make_png(tmp_path / "logo.png")
     chart = _make_png(tmp_path / "chart.png")
     verdicts = {
-        logo: fc.FigureClass(label="logo", confidence=0.97),
-        chart: fc.FigureClass(label="bar_chart", confidence=0.97),
+        logo: fc.FigureClass(label="logo", confidence=0.97, decorative_mass=0.99),
+        chart: fc.FigureClass(label="bar_chart", confidence=0.97, decorative_mass=0.01),
     }
     monkeypatch.setattr(
         "doc_convert.figure_classifier.classify_figures",
@@ -255,7 +273,7 @@ def test_filter_by_class_classifies_each_file_once(monkeypatch: pytest.MonkeyPat
 
     def fake_classify(paths: list[Path]) -> list[fc.FigureClass]:
         seen.append(list(paths))
-        return [fc.FigureClass(label="icon", confidence=0.99) for _ in paths]
+        return [fc.FigureClass(label="icon", confidence=0.99, decorative_mass=0.99) for _ in paths]
 
     monkeypatch.setattr("doc_convert.figure_classifier.classify_figures", fake_classify)
 
@@ -293,7 +311,7 @@ def test_filter_figures_runs_size_floor_before_classifier(monkeypatch: pytest.Mo
 
     def fake_classify(paths: list[Path]) -> list[fc.FigureClass]:
         classified.append(list(paths))
-        return [fc.FigureClass(label="photograph", confidence=0.99) for _ in paths]
+        return [fc.FigureClass(label="photograph", confidence=0.99, decorative_mass=0.0) for _ in paths]
 
     monkeypatch.setattr("doc_convert.figure_classifier.classify_figures", fake_classify)
 
@@ -341,6 +359,8 @@ def test_prefetch_reports_availability(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class _FakeTensor:
+    """Minimal stand-in for the probability tensor _forward manipulates."""
+
     def __init__(self, rows: int) -> None:
         self.rows = rows
 
@@ -355,6 +375,13 @@ class _FakeTensor:
 
     def max(self, dim: int = -1) -> tuple[_FakeList, _FakeList]:
         return _FakeList([0.99] * self.rows), _FakeList([0] * self.rows)
+
+    def __getitem__(self, _key: object) -> _FakeTensor:
+        """Column selection for the decorative-mass sum."""
+        return self
+
+    def sum(self, dim: int = -1) -> _FakeList:
+        return _FakeList([0.99] * self.rows)
 
 
 class _FakeList:
