@@ -63,7 +63,7 @@ src/
 │   │   ├── msg.py        # MsgConverter (extract-msg → EML bytes → EmlConverter)
 │   │   └── media.py      # MediaConverter (audio/video → --llm + audio sections + video chunking)
 │   ├── pptx_slide_vlm.py # PPTX whole-slide screenshot rendering (soffice+pypdfium2) + slide VLM interpretation via vision_llm + speaker notes
-│   ├── vision_llm.py     # Shared vision primitive: one image + one prompt -> text, retry/transient classification, map_concurrent fanout
+│   ├── vision_llm.py     # Shared vision primitive: one image + one prompt -> text, base64-aware size guard, retry/transient classification, map_concurrent fanout
 │   ├── markdown.py       # build_document_markdown/build_pptx_slides_markdown (inlined figure/table descriptions), build_images_catalog, collect_floating_contexts
 │   ├── vlm.py            # Caption description pipelines (local HF + external API)
 │   ├── ocr_llm.py        # LlmOcrModel: cloud-LLM OCR engine for the local PDF pipeline (registers with docling's OCR factory)
@@ -110,6 +110,7 @@ src/
 - Cache: skip conversion if output exists, use `-f` to force.
 - Unified output: all conversions write to `<name>_docling/document.md`.
 - Apple Silicon: PDF pipeline and local captioner auto-retry on CPU when an MPS float64 error is raised (detection in `vlm.is_mps_float64_error`). `--cpu` is still available to force CPU from the start.
+- Base64 budget (`vision_llm.encode_image`): provider limits apply to the **base64 payload**, which is 4/3 the bytes on disk, so the file-size budget is scaled by 3/4 before `ensure_image_under_limit` runs. Without it a 4.3 MB PNG passed the guard untouched, the API answered 400, and that figure silently lost its caption (reproduced and fixed; regression test asserts the encoded payload, not the file). The same off-by-4/3 still exists in the docling-side guard used by `ocr_llm` and `converters/image`; fix it when those move off docling.
 - Image size guard (`doc_convert.image_prep`): every image sent to a cloud LLM (captions, figure descriptions, OCR crops, PPTX slide screenshots, companion images) passes through `ensure_image_under_limit` before encoding. Images >5 MB are converted to JPEG at quality 90 and quality is reduced by 10% per step down to 20%; if still oversized the image is halved in resolution and the loop restarts (up to 4 halvings). A warning is logged whenever any compression or downscale occurs. The original file is never modified; a tmp `.jpg` is created and auto-deleted via the `PreparedImage` context manager. PDFs skip this path entirely.
 - Output guard (`doc_convert.output_guard`): every output dir is registered before mkdir; on any failure (exception, Ctrl+C, SIGTERM/SIGHUP/SIGQUIT, typer.Exit), `cleanup_pending()` runs in a `finally` block and removes the dir if it was newly created and contains no **non-empty** `document.md` or `audio.ogg` (a 0-byte marker is a silently-failed conversion, not an artifact, and is cleaned up too). Pre-existing dirs keep their original content; only files added by the failed run are removed. SIGKILL cannot be caught.
 

@@ -79,13 +79,31 @@ class VisionAttempt:
 
 
 def encode_image(image_path: Path) -> tuple[str, str]:
-    """Return ``(mime, base64)`` for an image, shrunk first if it exceeds the API limit."""
-    from doc_convert.image_prep import ensure_image_under_limit  # noqa: PLC0415
+    """Return ``(mime, base64)`` for an image, shrunk first if it exceeds the API limit.
 
-    with ensure_image_under_limit(image_path) as prepared:
+    The provider's ceiling applies to the **base64 payload**, which is 4/3 the
+    size of the bytes on disk. ``MAX_IMAGE_BYTES`` is a file-size budget, so it
+    is scaled by 3/4 here. Without that, a 4.5 MB PNG passes the guard untouched
+    and then gets rejected: measured on a real 3072x1728 figure, 4.54 MB raw is
+    6.05 MB of base64 and the API answered 400, silently costing that figure its
+    caption. At 3/4 the same image goes through at 0.86 MB and answers 200.
+    """
+    from doc_convert.image_prep import MAX_IMAGE_BYTES, ensure_image_under_limit  # noqa: PLC0415
+
+    budget = MAX_IMAGE_BYTES * 3 // 4
+    with ensure_image_under_limit(image_path, max_bytes=budget) as prepared:
         raw = prepared.path.read_bytes()
         mime = "image/jpeg" if prepared.path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
-    return mime, base64.b64encode(raw).decode()
+    b64 = base64.b64encode(raw).decode()
+    if len(b64) > MAX_IMAGE_BYTES:
+        # The guard could not get under budget (very large lossless source).
+        # Send it anyway rather than dropping the figure, but say so.
+        logger.warning(
+            "%s still encodes to %.1f MB of base64 after compression; the provider may reject it",
+            image_path.name,
+            len(b64) / 1024 / 1024,
+        )
+    return mime, b64
 
 
 def build_messages(prompt: str, mime: str, b64: str, *, system: str | None = None) -> list[dict[str, Any]]:

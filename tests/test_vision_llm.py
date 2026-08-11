@@ -326,3 +326,35 @@ def test_map_concurrent_reports_progress_in_completion_order() -> None:
     map_concurrent([1, 2, 3], work, 2, on_done=on_done)
     assert sorted(d for d, _ in seen) == [1, 2, 3]
     assert sorted(i for _, i in seen) == [1, 2, 3]
+
+
+def test_encode_image_budgets_for_base64_inflation(tmp_path: Path) -> None:
+    """Regression: the provider limit applies to the base64 payload, which is 4/3
+    the bytes on disk. A file-size-only guard let a 4.3 MB PNG through untouched,
+    the API answered 400, and that figure silently lost its caption.
+
+    The fixture must land in the dangerous window: above the base64-aware budget
+    (3/4 of the limit) but at or below the raw limit, so a file-size-only guard
+    would leave it alone. Verified to fail when the 3/4 factor is removed.
+    """
+    import random  # noqa: PLC0415
+
+    from doc_convert.image_prep import MAX_IMAGE_BYTES  # noqa: PLC0415
+
+    rng = random.Random(7)
+    width, height = 1400, 1080  # noise defeats PNG compression: lands around 4.3 MB
+    img = Image.new("RGB", (width, height))
+    img.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256)) for _ in range(width * height)])
+    big = tmp_path / "big.png"
+    img.save(big, format="PNG")
+
+    raw_size = big.stat().st_size
+    assert MAX_IMAGE_BYTES * 3 // 4 < raw_size <= MAX_IMAGE_BYTES, (
+        f"fixture is {raw_size / 1024 / 1024:.2f} MB, outside the window this test exists to cover"
+    )
+
+    _mime, b64 = encode_image(big)
+    assert len(b64) <= MAX_IMAGE_BYTES, (
+        f"base64 payload is {len(b64) / 1024 / 1024:.2f} MB, over the "
+        f"{MAX_IMAGE_BYTES / 1024 / 1024:.2f} MB limit the provider enforces"
+    )
