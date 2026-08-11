@@ -21,8 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import tempfile
-from pathlib import Path
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
 from docling.datamodel.pipeline_options import OcrOptions
@@ -31,9 +30,11 @@ from docling_core.types.doc.page import BoundingRectangle, TextCell
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from pathlib import Path
 
     from docling.datamodel.base_models import Page
     from docling.datamodel.document import ConversionResult
+    from docling_core.types.doc.base import BoundingBox
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,17 @@ class LlmOcrOptions(OcrOptions):
     provider: str
     model: str
     lang: list[str] = ["auto"]  # noqa: RUF012 - pydantic copies field defaults per-instance
+
+
+@dataclass(frozen=True)
+class _OcrJob:
+    """One bitmap region waiting for transcription, already encoded."""
+
+    page_index: int
+    index: int
+    rect: BoundingBox
+    mime: str
+    b64: str
 
 
 class LlmOcrModel(BaseOcrModel):
@@ -83,55 +95,76 @@ class LlmOcrModel(BaseOcrModel):
         conv_res: ConversionResult,  # noqa: ARG002 - required by the docling page-model contract
         page_batch: Iterable[Page],
     ) -> Iterable[Page]:
+        """Transcribe every bitmap region of the batch, several requests at a time.
+
+        Cropping runs sequentially in this thread on purpose: docling's PDF
+        backends are not thread-safe, and ``get_page_image`` is cheap local work.
+        Only the API calls fan out, which is where the seconds are. Crops travel
+        as encoded bytes rather than temporary files, so a page with fifty small
+        regions no longer churns fifty files through the filesystem.
+        """
         if not self.enabled:
             yield from page_batch
             return
 
         from config import Settings  # noqa: PLC0415
-        from doc_convert.converters.image import convert_image_to_markdown  # noqa: PLC0415
-        from doc_convert.providers import get_ocr_prompt  # noqa: PLC0415
+        from doc_convert.providers import DEFAULT_LLM_CONCURRENCY, get_ocr_prompt, require_api_key  # noqa: PLC0415
+        from doc_convert.vision_llm import describe_encoded, encode_pil, make_client, map_concurrent  # noqa: PLC0415
 
         settings = Settings()
         prompt = get_ocr_prompt()
+        api_key = require_api_key(self.options.provider, settings)
 
-        for page in page_batch:
+        pages = list(page_batch)
+        jobs: list[_OcrJob] = []
+        for page_index, page in enumerate(pages):
             if page._backend is None or not page._backend.is_valid():
-                yield page
                 continue
-
-            ocr_rects = self.get_ocr_rects(page)
-            cells: list[TextCell] = []
-            for idx, ocr_rect in enumerate(ocr_rects):
+            for idx, ocr_rect in enumerate(self.get_ocr_rects(page)):
                 if ocr_rect.area() == 0:
                     continue
                 crop = page._backend.get_page_image(scale=self.scale, cropbox=ocr_rect)
-                with tempfile.NamedTemporaryFile(suffix=".png", mode="w+b", delete=False) as fh:
-                    tmp_path = Path(fh.name)
-                    crop.save(fh, "PNG")
-                try:
-                    text = convert_image_to_markdown(
-                        tmp_path, self.options.provider, self.options.model, settings, prompt=prompt
+                mime, b64 = encode_pil(crop, label=f"ocr region {idx}")
+                jobs.append(_OcrJob(page_index=page_index, index=idx, rect=ocr_rect, mime=mime, b64=b64))
+
+        texts: list[str] = []
+        if jobs:
+            workers = max(1, min(DEFAULT_LLM_CONCURRENCY, len(jobs)))
+            with make_client(settings, workers) as client:
+
+                def work(job: _OcrJob) -> str:
+                    return describe_encoded(
+                        job.mime,
+                        job.b64,
+                        prompt,
+                        self.options.provider,
+                        self.options.model,
+                        settings,
+                        api_key,
+                        client,
+                        label=f"ocr region {job.index}",
                     ).strip()
-                except Exception as exc:
-                    logger.warning("LLM OCR failed for region %d on a page: %s", idx, exc)
-                    continue
-                finally:
-                    tmp_path.unlink(missing_ok=True)
 
-                if not text:
-                    continue
-                cells.append(
-                    TextCell(
-                        index=idx,
-                        text=text,
-                        orig=text,
-                        from_ocr=True,
-                        confidence=1.0,
-                        rect=BoundingRectangle.from_bounding_box(ocr_rect),
-                    )
+                texts = map_concurrent(jobs, work, workers, what="OCR region")
+
+        cells_by_page: dict[int, list[TextCell]] = {i: [] for i in range(len(pages))}
+        for job, text in zip(jobs, texts, strict=True):
+            if not text:
+                logger.warning("LLM OCR returned nothing for region %d on page %d", job.index, job.page_index + 1)
+                continue
+            cells_by_page[job.page_index].append(
+                TextCell(
+                    index=job.index,
+                    text=text,
+                    orig=text,
+                    from_ocr=True,
+                    confidence=1.0,
+                    rect=BoundingRectangle.from_bounding_box(job.rect),
                 )
+            )
 
-            self.post_process_cells(cells, page)
+        for page_index, page in enumerate(pages):
+            self.post_process_cells(cells_by_page[page_index], page)
             yield page
 
 

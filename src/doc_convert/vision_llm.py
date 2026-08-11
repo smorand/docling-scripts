@@ -106,6 +106,32 @@ def encode_image(image_path: Path) -> tuple[str, str]:
     return mime, b64
 
 
+def encode_pil(image: Any, label: str = "crop") -> tuple[str, str]:
+    """Encode an in-memory PIL image, shrinking it if the payload would be rejected.
+
+    Mirrors :func:`encode_image`'s base64-aware budget without touching the disk.
+    """
+    import io  # noqa: PLC0415
+
+    from doc_convert.image_prep import MAX_IMAGE_BYTES  # noqa: PLC0415
+
+    budget = MAX_IMAGE_BYTES * 3 // 4
+    buf = io.BytesIO()
+    image.convert("RGB").save(buf, "PNG")
+    if buf.tell() <= budget:
+        return "image/png", base64.b64encode(buf.getvalue()).decode()
+
+    for quality in (90, 70, 50, 30):
+        jpeg = io.BytesIO()
+        image.convert("RGB").save(jpeg, "JPEG", quality=quality, optimize=True)
+        if jpeg.tell() <= budget:
+            logger.warning("%s recompressed to JPEG q=%d to fit the API payload limit", label, quality)
+            return "image/jpeg", base64.b64encode(jpeg.getvalue()).decode()
+
+    logger.warning("%s could not be shrunk under the payload limit; sending anyway", label)
+    return "image/jpeg", base64.b64encode(jpeg.getvalue()).decode()
+
+
 def build_messages(prompt: str, mime: str, b64: str, *, system: str | None = None) -> list[dict[str, Any]]:
     """Build the chat payload for one image.
 
@@ -172,8 +198,9 @@ def request_once(
     return VisionAttempt(text=content)
 
 
-def describe_image(
-    image_path: Path,
+def describe_encoded(
+    mime: str,
+    b64: str,
     prompt: str,
     provider: str,
     model: str,
@@ -182,20 +209,18 @@ def describe_image(
     client: httpx.Client,
     *,
     system: str | None = None,
+    label: str = "image",
     sleep: Callable[[float], None] = time.sleep,
 ) -> str:
-    """Describe one image, retrying transient failures. Returns "" when it gave up.
+    """Describe an already-encoded image, retrying transient failures.
 
-    An empty return is the caller's signal to leave that item undescribed rather
-    than to abort the document.
+    Separate from :func:`describe_image` so callers holding pixels in memory (the
+    OCR engine crops regions out of a PDF page) do not have to round-trip through
+    a temporary file just to satisfy a path-shaped signature.
+
+    Returns "" when every attempt failed, which the caller should treat as "this
+    item has no text/description" rather than as a reason to abort the document.
     """
-    label = image_path.name
-    try:
-        mime, b64 = encode_image(image_path)
-    except Exception as exc:
-        logger.warning("Could not read %s, skipping: %s", label, exc)
-        return ""
-
     messages = build_messages(prompt, mime, b64, system=system)
     for attempt in range(1, MAX_ATTEMPTS + 1):
         outcome = request_once(messages, provider, model, settings, api_key, client, label=label)
@@ -212,6 +237,30 @@ def describe_image(
         )
         sleep(wait)
     return ""
+
+
+def describe_image(
+    image_path: Path,
+    prompt: str,
+    provider: str,
+    model: str,
+    settings: Settings,
+    api_key: str,
+    client: httpx.Client,
+    *,
+    system: str | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Describe one image file, retrying transient failures. Returns "" if it gave up."""
+    label = image_path.name
+    try:
+        mime, b64 = encode_image(image_path)
+    except Exception as exc:
+        logger.warning("Could not read %s, skipping: %s", label, exc)
+        return ""
+    return describe_encoded(
+        mime, b64, prompt, provider, model, settings, api_key, client, system=system, label=label, sleep=sleep
+    )
 
 
 def make_client(settings: Settings, workers: int) -> httpx.Client:
