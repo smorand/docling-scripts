@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import logging
 import re
-import time
 from pathlib import Path  # noqa: TC003
 
 import typer
 
 from config import Settings  # noqa: TC001
+from doc_convert.providers import DEFAULT_LLM_CONCURRENCY
 from logging_config import console
 
 logger = logging.getLogger(__name__)
@@ -114,55 +114,50 @@ def describe_images_with_external_llm(
     *,
     prompt: str | None = None,
     contexts: list[str] | None = None,
+    concurrency: int = DEFAULT_LLM_CONCURRENCY,
 ) -> list[str]:
-    """Describe figures/tables with a cloud LLM.
+    """Describe figures/tables with a cloud LLM, ``concurrency`` at a time.
 
     ``prompt`` defaults to the figure caption prompt. ``contexts`` is an
     optional per-image context block (caption + body mention) that is
     prepended to the prompt; pass an empty string for items without context.
+
+    Each image is one independent HTTPS call, so this fans out over threads
+    (see ``vision_llm``). It deliberately does *not* go through docling's
+    VlmPipeline: that abstraction rebuilt a DocumentConverter per image, forced
+    sequential execution, and upscaled every figure 2x for no measured benefit.
+    An image that fails every retry yields "" and stays undescribed rather than
+    aborting the document.
     """
-    from doc_convert.converters.image import convert_image_to_markdown  # noqa: PLC0415
-    from doc_convert.providers import get_caption_prompt  # noqa: PLC0415
+    from doc_convert.providers import get_caption_prompt, require_api_key  # noqa: PLC0415
+    from doc_convert.vision_llm import describe_image, make_client, map_concurrent  # noqa: PLC0415
 
     base_prompt = prompt or get_caption_prompt()
     contexts = contexts or [""] * len(image_paths)
     if len(contexts) != len(image_paths):
         raise ValueError("contexts length must match image_paths length")
+    if not image_paths:
+        return []
 
-    _MAX_RETRIES = 5
-    _RETRY_BASE_DELAY = 2.0  # seconds; attempt k waits k * base
-
+    api_key = require_api_key(provider, settings)
     total = len(image_paths)
-    logger.info("Describing %d image(s) with %s/%s", total, provider, model)
-    descriptions: list[str] = []
-    for i, (img_path, ctx) in enumerate(zip(image_paths, contexts, strict=True), 1):
-        full_prompt = f"{ctx}{base_prompt}" if ctx else base_prompt
-        logger.info("Describing image %d/%d: %s", i, total, img_path.name)
-        # convert_image_to_markdown handles size enforcement internally for images.
-        # Retry on transient errors (SSL glitches, connection resets, etc.).
-        md = ""
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                md = convert_image_to_markdown(img_path, provider, model, settings, prompt=full_prompt)
-                break
-            except Exception as exc:
-                if attempt == _MAX_RETRIES:
-                    logger.error(
-                        "Image %s failed after %d attempts, skipping: %s",
-                        img_path.name,
-                        _MAX_RETRIES,
-                        exc,
-                    )
-                else:
-                    delay = attempt * _RETRY_BASE_DELAY
-                    logger.warning(
-                        "Image %s attempt %d/%d failed (%s), retrying in %.0fs",
-                        img_path.name,
-                        attempt,
-                        _MAX_RETRIES,
-                        exc,
-                        delay,
-                    )
-                    time.sleep(delay)
-        descriptions.append(md.strip())
-    return descriptions
+    workers = max(1, min(concurrency, total))
+    logger.info("Describing %d image(s) with %s/%s (%d at a time)", total, provider, model, workers)
+
+    jobs = list(zip(image_paths, contexts, strict=True))
+
+    def report(done: int, job: tuple[Path, str], description: str, elapsed: float) -> None:
+        img_path, _ctx = job
+        if description:
+            logger.info("Described %s in %.1fs (%d/%d done)", img_path.name, elapsed, done, total)
+        else:
+            logger.warning("No description for %s (%d/%d done)", img_path.name, done, total)
+
+    with make_client(settings, workers) as client:
+
+        def work(job: tuple[Path, str]) -> str:
+            img_path, ctx = job
+            full_prompt = f"{ctx}{base_prompt}" if ctx else base_prompt
+            return describe_image(img_path, full_prompt, provider, model, settings, api_key, client).strip()
+
+        return map_concurrent(jobs, work, workers, what="figure caption", on_done=report)

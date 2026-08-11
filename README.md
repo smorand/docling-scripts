@@ -35,19 +35,32 @@ All conversions write to a `<name>_docling/` directory with `document.md` as the
 - `--ocr-model <value>` — OCR engine for the `--engine local` PDF pipeline. OCR is the per-region "text from bitmap" stage; it only fires on scanned/image content, so born-digital PDFs are unaffected (and incur no LLM cost even with the LLM default). Value is `off` (alias for `--no-ocr`), `local` (Tesseract CLI via the system `tesseract` binary), or a `provider/model` slug to read each image region with a cloud LLM. **Default: `ibm/gemini-3.1-pro-preview`** (IBM ICA fronts Gemini, so no separate `GOOGLE_API_KEY` is needed; per-region crops go inline, so the missing Files API on `ibm/` is irrelevant here). Unlike `--captions`, it does **not** auto-inherit `--llm`. For fully-scanned documents prefer `--engine llm` (reads whole pages); LLM OCR shines on mostly-digital docs with small embedded image-text. The `local` engine needs the `tesseract` binary, plus language packs (`brew install tesseract-lang`) for anything beyond the bundled `eng`.
 - `--no-caption-filter` — turns off the caption filter, which is **on by default** and skips figures that cannot carry information before any captioner is paid. Two stages: a native size floor (anything under 64px on either axis) and docling's own figure classifier, which drops confidently decorative artwork (`logo`, `icon`, `qr_code`, `bar_code`, `stamp`, `signature` at ≥0.8 confidence). Skipped figures disappear from `document.md` and `images.md`; their PNG stays in `figures/` so you can audit what was filtered. On real client decks this removes 25-56% of caption calls (corporate and vendor logos, pictograms) with no content loss. Everything fails open: an unreadable image, a missing model, or a hesitant classification means "caption it anyway". See [Caption filter](#caption-filter).
 
-### Slide analysis is parallel
+### Vision calls run in parallel
 
-On a big deck the PPTX visual pass dominates everything else: one API call per slide, ~21 s each. 55 slides one at a time is ~19 minutes of pure network waiting. Those calls are independent, so they now run `--slide-concurrency` at a time (default 8).
+Every per-image vision call (figure captions, table descriptions, PPTX slide screenshots) is an independent HTTPS round trip of roughly 8 to 20 seconds. They used to be issued one at a time, so an image-heavy deck spent almost all of its wall clock waiting on the network. They now run `--llm-concurrency` at a time (default 8).
 
-Measured on a 52-slide client deck, cold cache, single run: **141 s of wall clock for 1084 s of request time, a 7.7x speedup** (18 min → 2.4 min). Every run logs its own ratio:
+Captions additionally no longer go through docling's `VlmPipeline`. Sending one figure to a chat-completions endpoint is not a document conversion, and routing it through one cost a `DocumentConverter` per image (the per-figure context block is part of the prompt, the prompt is part of docling's pipeline cache key, so the cache never hit), forced sequential execution, and upscaled every figure 2x. Measured on a 98-slide, 183-image client deck:
+
+| | docling path | direct path |
+|---|---|---|
+| Caption phase, 99 figures | 914 s | **247 s** |
+| Whole conversion | 1211 s | **801 s** |
+| Caption text volume | 19 185 words | 19 313 words (+0.7%) |
+| Figures, slides, notes, extracted text | — | identical |
+
+The 2x upscale was also measurably harmful: it cost up to +74% image tokens on small figures and 5.4x the payload on large ones (the provider caps image tokens near 1750 and downsamples anyway), and it read worse. On a bar chart whose true value is 904 the native image was read as 900 and the upscale as 950; on the deck's only data table the native run read the quantities 40/39/28/20 correctly where the upscale reported 40/23/28/20.
+
+Each run logs how much request time it overlapped:
 
 ```
-Slide analysis: 141s wall clock for 1084s of request time (7.7x from 8 workers)
+99 figure caption(s): 247s wall clock for 1750s of request time (7.1x overlap on 8 workers)
 ```
+
+Read that as overlap, not as speedup against sequential: per-call latency inflates under concurrency (captions went from 7.8 s sequential to a 10.5 s median at 8 workers), so the real caption gain on that deck was 3.7x, not 7.1x.
 
 The default is 8 because that is the last value measured to scale cleanly, on cold-cache runs against never-analysed decks:
 
-| workers | slides | speedup | latency/call |
+| workers | slides | overlap | latency/call |
 |---|---|---|---|
 | 4 | 55 | 3.96x | 21.0 s |
 | 6 | 41 | 5.60x | 22.0 s |
@@ -55,11 +68,9 @@ The default is 8 because that is the last value measured to scale cleanly, on co
 | 8 | 52 | 7.70x | 20.8 s |
 | 12 | 29 | 9.20x | 27.5 s |
 
-Per-call latency stays flat through 8, so the provider is not throttling. At 12 it inflates 37% and the marginal return collapses (50% more workers for 23% more output). Lower it if your provider rate-limits you; `--slide-concurrency 1` restores the old sequential behaviour. Because concurrency makes rate limits likelier, a slide that hits a transient failure (429, 5xx, read timeout, empty completion) is now retried with backoff instead of silently losing its analysis.
+Per-call latency stays flat through 8, so the provider is not throttling. At 12 it inflates 37% and the marginal return collapses. Lower `--llm-concurrency` if your provider rate-limits you; `1` restores sequential. Transient failures (429, 5xx, read timeouts, empty completions) are retried with backoff, so a rate limit costs time rather than a missing description; a wrong model slug still fails fast and cancels the queue.
 
-Threads are safe on this path specifically: it makes plain `httpx` calls (documented thread-safe) and touches no docling pipeline, no torch, and no global state. The figure captioner is deliberately **not** parallelised, because it runs through docling's `DocumentConverter` and installs a global monkeypatch.
-
-> Note when benchmarking: the provider caches identical requests. Re-running the same deck returns byte-identical analyses in a fraction of the time, so always compare on a deck that has never been analysed, or trust the logged ratio above (measured within a single run).
+> Note when benchmarking: the provider caches identical requests. Re-running the same deck returns byte-identical output in a fraction of the time, so always compare on a deck that has never been converted, or trust the in-run overlap figure.
 
 ### Caption filter
 

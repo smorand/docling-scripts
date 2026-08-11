@@ -164,7 +164,7 @@ class PptxConverter(BaseConverter):
                     self.output_dir,
                     self.options.settings,
                     llm=slide_vlm,
-                    concurrency=self.options.slide_concurrency,
+                    concurrency=self.options.llm_concurrency,
                 )
             slide_count = len(render_artifacts.image_paths_by_slide)
             visual_by_slide = {n: a.description for n, a in render_artifacts.analyses_by_slide.items()}

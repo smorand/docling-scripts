@@ -244,9 +244,9 @@ DEFAULT_COMPANION_LLM = "ibm/gemini-3.1-pro-preview"
 # 'claude-sonnet-4-6' is listed alongside claude-sonnet-4-5/claude-opus-4-8.
 DEFAULT_PPTX_SLIDE_VLM = "ibm/claude-sonnet-4-6"
 
-# How many slide screenshots are analysed at once by the PPTX visual pass. Each
-# call is an independent ~20 s HTTPS round trip, so a 52-slide deck used to
-# spend ~18 minutes waiting one request at a time.
+# How many per-image vision calls run at once, for both figure captions and PPTX
+# slide screenshots. Each is an independent ~8-20 s HTTPS round trip, so a deck
+# used to spend most of its wall clock waiting one request at a time.
 #
 # 8 is the last value measured to scale cleanly on IBM ICA. Cold-cache runs on
 # never-analysed client decks, comparing wall clock against total request time:
@@ -261,8 +261,8 @@ DEFAULT_PPTX_SLIDE_VLM = "ibm/claude-sonnet-4-6"
 # Per-call latency stays flat up to 8 (so the provider is not throttling) and
 # inflates sharply at 12 while marginal throughput collapses (+50% workers for
 # +23% output). No retries were triggered at any level, but transient failures
-# are retried anyway (see pptx_slide_vlm), so a bad day costs time, not content.
-DEFAULT_SLIDE_CONCURRENCY = 8
+# are retried anyway (see vision_llm), so a bad day costs time, not content.
+DEFAULT_LLM_CONCURRENCY = 8
 
 # Default model for image conversion when the input itself is an image and the
 # user did not pass --llm. Images always go through the external VLM pipeline,

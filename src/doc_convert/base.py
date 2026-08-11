@@ -22,7 +22,7 @@ from doc_convert.formats import (
     OcrSpec,
 )
 from doc_convert.output import print_output_summary
-from doc_convert.providers import DEFAULT_SLIDE_CONCURRENCY
+from doc_convert.providers import DEFAULT_LLM_CONCURRENCY
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ class ConvertOptions:
     llm: str | None = None
     slide_screenshots: bool = True
     slide_vlm: str | None = None
-    slide_concurrency: int = DEFAULT_SLIDE_CONCURRENCY
+    llm_concurrency: int = DEFAULT_LLM_CONCURRENCY
     caption_filter: bool = True
     settings: Settings = field(default_factory=Settings)
 

@@ -24,7 +24,7 @@ from doc_convert.output import make_document_symlink, resolve_output_dir
 from doc_convert.output_guard import cleanup_pending as _cleanup_outputs
 from doc_convert.output_guard import install_signal_handlers as _install_signal_handlers
 from doc_convert.output_guard import register as _register_output
-from doc_convert.providers import DEFAULT_SLIDE_CONCURRENCY
+from doc_convert.providers import DEFAULT_LLM_CONCURRENCY
 from logging_config import console, setup_logging
 from tracing import configure_tracing
 
@@ -200,15 +200,23 @@ def main(
         ),
         show_default="ibm/claude-sonnet-4-6",
     ),
-    slide_concurrency: int = typer.Option(
-        DEFAULT_SLIDE_CONCURRENCY,
-        "--slide-concurrency",
+    llm_concurrency: int = typer.Option(
+        DEFAULT_LLM_CONCURRENCY,
+        "--llm-concurrency",
         min=1,
         help=(
-            "PPTX only: how many slide screenshots to analyze at once. Each slide is an "
-            "independent API call, so this cuts the dominant cost on big decks almost "
-            "linearly. Lower it if the provider rate-limits you; 1 restores sequential."
+            "How many per-image vision calls to run at once (figure captions and PPTX "
+            "slide screenshots). Each is an independent API call, so this cuts the dominant "
+            "cost on image-heavy documents almost linearly. Lower it if the provider "
+            "rate-limits you; 1 restores sequential."
         ),
+    ),
+    slide_concurrency: int | None = typer.Option(
+        None,
+        "--slide-concurrency",
+        min=1,
+        hidden=True,
+        help="Deprecated alias for --llm-concurrency.",
     ),
     companion_llm: str | None = typer.Option(
         None,
@@ -395,6 +403,12 @@ def main(
     if instructions and not analyze_prompt:
         console.print("[yellow]--instructions is deprecated; use --analyze-prompt instead.[/yellow]")
 
+    effective_concurrency = llm_concurrency
+    if slide_concurrency is not None:
+        console.print("[yellow]--slide-concurrency is deprecated; use --llm-concurrency instead.[/yellow]")
+        if llm_concurrency == DEFAULT_LLM_CONCURRENCY:
+            effective_concurrency = slide_concurrency
+
     # ── Multi-file batch: one subprocess per input ───────────────────────
     if len(docs) > 1:
         _guard_batch_compatible(
@@ -423,7 +437,7 @@ def main(
             no_caption_filter=no_caption_filter,
             no_slide_screenshots=no_slide_screenshots,
             slide_vlm=slide_vlm,
-            slide_concurrency=slide_concurrency,
+            llm_concurrency=effective_concurrency,
             cpu=cpu,
             all_formats=all_formats,
             start_audio=start_audio,
@@ -509,7 +523,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
     no_caption_filter: bool,
     no_slide_screenshots: bool,
     slide_vlm: str | None,
-    slide_concurrency: int,
+    llm_concurrency: int,
     cpu: bool,
     all_formats: bool,
     start_audio: bool,
@@ -793,7 +807,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
             llm=llm,
             slide_screenshots=not no_slide_screenshots,
             slide_vlm=slide_vlm,
-            slide_concurrency=slide_concurrency,
+            llm_concurrency=llm_concurrency,
             caption_filter=not no_caption_filter,
             settings=settings,
         )
@@ -820,7 +834,7 @@ def _dispatch(  # noqa: PLR0912, PLR0915
                 llm=resolve_image_llm(llm),
                 slide_screenshots=not no_slide_screenshots,
                 slide_vlm=slide_vlm,
-                slide_concurrency=slide_concurrency,
+                llm_concurrency=llm_concurrency,
                 caption_filter=not no_caption_filter,
                 settings=settings,
             )
