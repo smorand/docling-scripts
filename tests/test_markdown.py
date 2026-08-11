@@ -8,12 +8,15 @@ from docling_core.types.doc.document import PictureItem
 
 from doc_convert.markdown import (
     FloatingArtifacts,
+    FloatingContext,
     _extract_label,
     _find_mention,
     _format_description_block,
     _heading_for,
     _render_item_lines,
     _shorten_sentence,
+    build_document_markdown,
+    build_images_catalog,
     build_pptx_slides_markdown,
     get_pdf_metadata,
 )
@@ -224,3 +227,117 @@ def test_slide_with_only_filtered_figures_gets_placeholder() -> None:
     # The other two sections must still carry their content.
     assert "a chart of revenue" in md
     assert "_No speaker notes._" in md
+
+
+# ---------------------------------------------------------------------------
+# Repeated figures: describe once, point at it afterwards
+# ---------------------------------------------------------------------------
+
+
+class _FakePicture(PictureItem):
+    """A PictureItem placed on a given page/slide."""
+
+    def __init__(self, ref: str, page_no: int) -> None:
+        super().__init__(self_ref=ref)
+        self.prov = [_FakeProv(page_no)]
+
+
+def _artifacts_for(refs_to_path: dict[str, str], description: str) -> FloatingArtifacts:
+    return FloatingArtifacts(
+        figure_paths=dict(refs_to_path),
+        figure_descriptions=dict.fromkeys(refs_to_path, description),
+    )
+
+
+def test_repeated_figure_is_described_once_in_document_markdown() -> None:
+    """The same image on three pages must carry its description once and point at
+    it twice: a template logo on 36 slides was 24% of a real document.md."""
+    desc = "A very long description of the same template banner."
+    items = [_FakePicture(f"#/pictures/{i}", page_no=i + 1) for i in range(3)]
+    artifacts = _artifacts_for({it.self_ref: "figures/figure_2.png" for it in items}, desc)
+
+    md = build_document_markdown(_FakeDoc(items), artifacts, {}, paginated=True)
+
+    assert md.count(desc) == 1, "description must appear exactly once"
+    assert md.count("*Image: [`figures/figure_2.png`]") == 3, "every placement keeps its image link"
+    assert md.count("Same image as under Page 1; description given there.") == 2
+    assert md.count("#### Figure") == 3, "every placement keeps its heading"
+
+
+def test_distinct_figures_each_keep_their_description() -> None:
+    """Dedup must key on the image file, not on the fact that a figure repeats."""
+    items = [_FakePicture("#/pictures/0", 1), _FakePicture("#/pictures/1", 2)]
+    artifacts = FloatingArtifacts(
+        figure_paths={"#/pictures/0": "figures/a.png", "#/pictures/1": "figures/b.png"},
+        figure_descriptions={"#/pictures/0": "describes A", "#/pictures/1": "describes B"},
+    )
+
+    md = build_document_markdown(_FakeDoc(items), artifacts, {}, paginated=True)
+
+    assert "describes A" in md
+    assert "describes B" in md
+    assert "Same image as" not in md
+
+
+def test_repeat_keeps_its_own_citing_sentence() -> None:
+    """The description is per image, but the sentence citing it differs per
+    placement and must survive on every occurrence."""
+    items = [_FakePicture("#/pictures/0", 1), _FakePicture("#/pictures/1", 2)]
+    artifacts = _artifacts_for({it.self_ref: "figures/shared.png" for it in items}, "shared description")
+    contexts = {
+        "#/pictures/0": FloatingContext(mention="first mention here"),
+        "#/pictures/1": FloatingContext(mention="a different mention"),
+    }
+
+    md = build_document_markdown(_FakeDoc(items), artifacts, contexts, paginated=True)
+
+    assert md.count("shared description") == 1
+    assert "first mention here" in md
+    assert "a different mention" in md
+
+
+def test_pptx_repeat_points_at_the_slide() -> None:
+    """PPTX locations must read as slides, not pages."""
+    items = [_FakePicture("#/pictures/0", 4), _FakePicture("#/pictures/1", 9)]
+    artifacts = _artifacts_for({it.self_ref: "figures/banner.png" for it in items}, "the banner description")
+
+    md = build_pptx_slides_markdown(
+        _FakeDoc(items),
+        artifacts,
+        {},
+        visual_by_slide={},
+        notes_by_slide={},
+        slide_count=9,
+    )
+
+    assert md.count("the banner description") == 1
+    assert "Same image as under Slide 4; description given there." in md
+
+
+def test_images_catalog_lists_each_file_once_with_every_page() -> None:
+    """A catalog that lists the same picture 36 times is not a catalog: 55% of a
+    real 313 KB images.md was duplicate entries."""
+    items = [_FakePicture("#/pictures/0", 2), _FakePicture("#/pictures/1", 7), _FakePicture("#/pictures/2", 11)]
+    artifacts = _artifacts_for({it.self_ref: "figures/logo.png" for it in items}, "the logo description")
+
+    catalog = build_images_catalog(_FakeDoc(items), artifacts, {})
+
+    assert catalog.count("- **Path:** `figures/logo.png`") == 1
+    assert catalog.count("the logo description") == 1
+    assert "- **Pages:** 2, 7, 11" in catalog
+
+
+def test_images_catalog_merges_context_from_later_placements() -> None:
+    """A later placement can carry a caption the first one lacked."""
+    items = [_FakePicture("#/pictures/0", 1), _FakePicture("#/pictures/1", 2)]
+    artifacts = _artifacts_for({it.self_ref: "figures/x.png" for it in items}, "desc")
+    contexts = {
+        "#/pictures/0": FloatingContext(),
+        "#/pictures/1": FloatingContext(caption="Figure 4: the real caption", mention="cited late"),
+    }
+
+    catalog = build_images_catalog(_FakeDoc(items), artifacts, contexts)
+
+    assert "- **Caption:** Figure 4: the real caption" in catalog
+    assert "- **Mention:** cited late" in catalog
+    assert catalog.count("- **Path:** `figures/x.png`") == 1

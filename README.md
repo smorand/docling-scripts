@@ -72,6 +72,26 @@ Per-call latency stays flat through 8, so the provider is not throttling. At 12 
 
 > Note when benchmarking: the provider caches identical requests. Re-running the same deck returns byte-identical output in a fraction of the time, so always compare on a deck that has never been converted, or trust the in-run overlap figure.
 
+### Each figure is described once
+
+A template banner reused on 36 slides was captioned once (the API call is deduplicated by content hash) but its 200-word description was *printed* 36 times. On a real 98-slide deck that was 24% of `document.md` and 55% of `images.md`.
+
+Now the first placement carries the full description and later ones point at it:
+
+```
+#### Figure
+
+> *Same image as under Slide 4; description given there.*
+>
+> *Cited in document: «our 2026 roadmap»*
+
+*Image: [`figures/figure_2.png`](figures/figure_2.png)*
+```
+
+Every placement keeps its heading, its image link and its own citing sentence, which differs per occurrence; only the repeated description is replaced by a pointer. `images.md` became a real catalog: one entry per distinct image file, listing every page or slide it appears on. Measured on that deck: `document.md` 688 KB to 531 KB, `images.md` 314 KB to 146 KB, with the 99 descriptions, 212 image links, 212 figure headings and 213 citing sentences all still present, and the mechanically extracted slide text and speaker notes byte-identical.
+
+If you split `document.md` per slide for chunked retrieval, note that a chunk containing a repeated figure now holds a pointer rather than the description; read the pointed-to slide or `images.md` for the text.
+
 ### Caption filter
 
 Slide decks are full of artwork that costs a caption call and returns nothing: the company logo on every slide, partner logos, arrow and gear pictograms. Exact-duplicate images were already deduplicated by content hash, but the same logo re-exported at a slightly different size is a *different* file, so hashing never caught it.

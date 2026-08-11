@@ -234,6 +234,83 @@ def _format_description_block(description: str, mention: str) -> str:
     return "\n".join(lines)
 
 
+def _render_table_lines(
+    item: TableItem,
+    doc: object,
+    ref: str,
+    artifacts: FloatingArtifacts,
+    ctx: FloatingContext,
+) -> list[str]:
+    """Heading, inlined markdown table, then its description."""
+    lines = [_heading_for(ctx.label, "Table", ctx.caption), ""]
+    try:
+        table_md = item.export_to_markdown(doc=doc).strip()  # type: ignore[arg-type]
+    except Exception:
+        logger.warning("Failed to serialise table %s", ref)
+        table_md = ""
+    if table_md:
+        lines.extend([table_md, ""])
+    block = _format_description_block(artifacts.table_descriptions.get(ref, ""), ctx.mention)
+    if block:
+        lines.extend([block, ""])
+    return lines
+
+
+def _render_figure_lines(
+    ref: str,
+    artifacts: FloatingArtifacts,
+    ctx: FloatingContext,
+    seen_figures: dict[str, str] | None,
+    location: str,
+) -> list[str]:
+    """Heading, description (or a pointer to it), then the image link.
+
+    ``seen_figures`` maps an already-described figure path to the ``location``
+    where its description was printed. A template image reused on 36 slides used
+    to print the same 200-word description 36 times, which was 24% of a real
+    684 KB document.md. Later occurrences keep their heading, their own citing
+    sentence (which differs per occurrence) and the image link, and point at the
+    first description instead of repeating it. Pass ``None`` to print every
+    description in full.
+    """
+    fig_path = artifacts.figure_paths.get(ref, "")
+    if not fig_path:
+        # Dropped by the caption filter (size floor) or extraction failed:
+        # nothing to show, the figure disappears from document.md entirely.
+        return []
+
+    lines = [_heading_for(ctx.label, "Figure", ctx.caption), ""]
+    description = artifacts.figure_descriptions.get(ref, "")
+    already_at = None if seen_figures is None else seen_figures.get(fig_path)
+
+    if already_at is None:
+        block = _format_description_block(description, ctx.mention)
+        if block:
+            lines.extend([block, ""])
+        if seen_figures is not None and description:
+            seen_figures[fig_path] = location
+    else:
+        where = f"under {already_at}" if already_at else "earlier in this document"
+        lines.extend([_format_description_block(f"*Same image as {where}; description given there.*", ctx.mention), ""])
+
+    lines.extend([f"*Image: [`{fig_path}`]({fig_path})*", ""])
+    return lines
+
+
+def _render_text_lines(item: object, heading_offset: int) -> list[str]:
+    """Section headers, list items, and plain paragraphs."""
+    text = getattr(item, "text", None)
+    if not text:
+        return []
+    label = str(getattr(item, "label", "")).lower()
+    if "section_header" in label:
+        level = getattr(item, "level", 1)
+        return [f"{'#' * min(level + heading_offset, 6)} {text}\n"]
+    if "list_item" in label:
+        return [f"- {text}"]
+    return [f"{text}\n"]
+
+
 def _render_item_lines(
     item: object,
     doc: object,
@@ -242,58 +319,20 @@ def _render_item_lines(
     contexts: dict[str, FloatingContext],
     *,
     heading_offset: int = 1,
+    seen_figures: dict[str, str] | None = None,
+    location: str = "",
 ) -> list[str]:
     """Render one docling item (table, figure, or text) as markdown lines.
 
-    ``heading_offset`` shifts section-header levels so they nest correctly
-    under whatever heading structure the caller already emitted (e.g. PPTX
-    per-slide grouping nests two levels deeper than the flat PDF/DOCX output).
+    ``heading_offset`` shifts section-header levels so they nest correctly under
+    whatever heading structure the caller already emitted (e.g. PPTX per-slide
+    grouping nests two levels deeper than the flat PDF/DOCX output).
     """
-    lines: list[str] = []
     if isinstance(item, TableItem):
-        ctx = contexts.get(ref, FloatingContext())
-        lines.append(_heading_for(ctx.label, "Table", ctx.caption))
-        lines.append("")
-        try:
-            table_md = item.export_to_markdown(doc=doc).strip()  # type: ignore[arg-type]
-        except Exception:
-            logger.warning("Failed to serialise table %s", ref)
-            table_md = ""
-        if table_md:
-            lines.append(table_md)
-            lines.append("")
-        block = _format_description_block(artifacts.table_descriptions.get(ref, ""), ctx.mention)
-        if block:
-            lines.append(block)
-            lines.append("")
-    elif isinstance(item, PictureItem):
-        fig_path = artifacts.figure_paths.get(ref, "")
-        if not fig_path:
-            # Dropped by the caption filter (size floor) or extraction failed:
-            # nothing to show, the figure disappears from document.md entirely.
-            return lines
-        ctx = contexts.get(ref, FloatingContext())
-        lines.append(_heading_for(ctx.label, "Figure", ctx.caption))
-        lines.append("")
-        block = _format_description_block(artifacts.figure_descriptions.get(ref, ""), ctx.mention)
-        if block:
-            lines.append(block)
-            lines.append("")
-        lines.append(f"*Image: [`{fig_path}`]({fig_path})*")
-        lines.append("")
-    else:
-        text = getattr(item, "text", None)
-        if text:
-            label = getattr(item, "label", "")
-            if "section_header" in str(label).lower():
-                level = getattr(item, "level", 1)
-                prefix = "#" * min(level + heading_offset, 6)
-                lines.append(f"{prefix} {text}\n")
-            elif "list_item" in str(label).lower():
-                lines.append(f"- {text}")
-            else:
-                lines.append(f"{text}\n")
-    return lines
+        return _render_table_lines(item, doc, ref, artifacts, contexts.get(ref, FloatingContext()))
+    if isinstance(item, PictureItem):
+        return _render_figure_lines(ref, artifacts, contexts.get(ref, FloatingContext()), seen_figures, location)
+    return _render_text_lines(item, heading_offset)
 
 
 def build_document_markdown(
@@ -314,6 +353,7 @@ def build_document_markdown(
     contexts = contexts or {}
     lines: list[str] = []
     current_page: int | None = None
+    seen_figures: dict[str, str] = {}
 
     if title:
         lines.append(f"# {title}\n")
@@ -336,7 +376,17 @@ def build_document_markdown(
                 current_page = page_no
 
         ref = getattr(item, "self_ref", "")
-        lines.extend(_render_item_lines(item, doc, ref, artifacts, contexts))
+        lines.extend(
+            _render_item_lines(
+                item,
+                doc,
+                ref,
+                artifacts,
+                contexts,
+                seen_figures=seen_figures,
+                location=f"Page {current_page}" if current_page is not None else "",
+            )
+        )
 
     return "\n".join(lines)
 
@@ -367,6 +417,7 @@ def build_pptx_slides_markdown(
     hidden_slides = hidden_slides or set()
     contexts = contexts or {}
     lines: list[str] = []
+    seen_figures: dict[str, str] = {}
     if title:
         lines.append(f"# {title}\n")
 
@@ -385,7 +436,18 @@ def build_pptx_slides_markdown(
         lines.append("### Extracted Content (text + figures)\n")
         rendered: list[str] = []
         for ref, item in items_by_slide.get(slide_no, []):
-            rendered.extend(_render_item_lines(item, doc, ref, artifacts, contexts, heading_offset=3))
+            rendered.extend(
+                _render_item_lines(
+                    item,
+                    doc,
+                    ref,
+                    artifacts,
+                    contexts,
+                    heading_offset=3,
+                    seen_figures=seen_figures,
+                    location=f"Slide {slide_no}",
+                )
+            )
         # A slide can have items that render to nothing: every figure on it was
         # dropped by the caption filter, or extraction failed. Emit the
         # placeholder rather than an ambiguous empty section.
@@ -412,15 +474,25 @@ def build_pptx_slides_markdown(
 # ─── Sidecar image catalog (images.md) ──────────────────────────────────────
 
 
-def build_images_catalog(
+@dataclass
+class _CatalogEntry:
+    """One distinct image file in ``images.md``, with every placement it has."""
+
+    heading: str
+    classification: str
+    description: str
+    pages: list[str] = field(default_factory=list)
+    captions: list[str] = field(default_factory=list)
+    mentions: list[str] = field(default_factory=list)
+
+
+def _collect_catalog_entries(
     doc: object,
     artifacts: FloatingArtifacts,
-    contexts: dict[str, FloatingContext] | None = None,
-) -> str:
-    """Build the standalone ``images.md`` sidecar catalog."""
-    contexts = contexts or {}
-    lines: list[str] = ["# Image Catalog\n"]
-
+    contexts: dict[str, FloatingContext],
+) -> dict[str, _CatalogEntry]:
+    """Group picture items by image file, merging the context of each placement."""
+    entries: dict[str, _CatalogEntry] = {}
     for item, _ in doc.iterate_items():  # type: ignore[attr-defined]
         if not isinstance(item, PictureItem):
             continue
@@ -430,31 +502,61 @@ def build_images_catalog(
             continue
 
         ctx = contexts.get(ref, FloatingContext())
-        description = artifacts.figure_descriptions.get(ref, "") or get_vlm_description(item)
+        description = (artifacts.figure_descriptions.get(ref, "") or get_vlm_description(item)).strip()
         classification = get_picture_classification(item)
-        page_no = ""
         prov = getattr(item, "prov", None)
-        if prov:
-            page_no = str(prov[0].page_no)
+        page_no = str(prov[0].page_no) if prov else ""
 
-        heading = ctx.label or Path(fig_path).stem
-        lines.append(f"## {heading}")
+        entry = entries.setdefault(
+            fig_path,
+            _CatalogEntry(
+                heading=ctx.label or Path(fig_path).stem,
+                classification=classification,
+                description=description,
+            ),
+        )
+        # A later placement can carry context the first one lacked, so keep
+        # merging even once the description is settled.
+        for value, bucket in ((page_no, entry.pages), (ctx.caption, entry.captions), (ctx.mention, entry.mentions)):
+            if value and value not in bucket:
+                bucket.append(value)
+        entry.classification = entry.classification or classification
+        entry.description = entry.description or description
+    return entries
+
+
+def build_images_catalog(
+    doc: object,
+    artifacts: FloatingArtifacts,
+    contexts: dict[str, FloatingContext] | None = None,
+) -> str:
+    """Build the standalone ``images.md`` sidecar catalog.
+
+    One entry per distinct image file, not per placement. A template image reused
+    on 36 slides produced 36 identical entries, which made 55% of a real 313 KB
+    catalog; a catalog that lists the same picture 36 times is not a catalog. Each
+    entry records every page or slide the image appears on, and every caption and
+    citing sentence collected across those placements.
+    """
+    entries = _collect_catalog_entries(doc, artifacts, contexts or {})
+
+    lines: list[str] = ["# Image Catalog\n"]
+    for fig_path, entry in entries.items():
+        lines.append(f"## {entry.heading}")
         lines.append("")
         lines.append(f"![{Path(fig_path).stem}]({fig_path})")
         lines.append("")
         lines.append(f"- **Path:** `{fig_path}`")
-        if page_no:
-            lines.append(f"- **Page:** {page_no}")
-        if classification:
-            lines.append(f"- **Type:** {classification}")
-        if ctx.caption:
-            lines.append(f"- **Caption:** {ctx.caption}")
-        if ctx.mention:
-            lines.append(f"- **Mention:** {ctx.mention}")
+        if entry.pages:
+            lines.append(f"- **{'Pages' if len(entry.pages) > 1 else 'Page'}:** {', '.join(entry.pages)}")
+        if entry.classification:
+            lines.append(f"- **Type:** {entry.classification}")
+        lines.extend(f"- **Caption:** {caption}" for caption in entry.captions)
+        lines.extend(f"- **Mention:** {mention}" for mention in entry.mentions)
         lines.append("")
         lines.append("### Description")
         lines.append("")
-        lines.append(description.strip() if description else "_No description available._")
+        lines.append(entry.description or "_No description available._")
         lines.append("")
 
     return "\n".join(lines)
