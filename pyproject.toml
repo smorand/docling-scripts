@@ -125,6 +125,11 @@ module = [
     "bs4",
 ]
 ignore_missing_imports = true
+# docling/docling_core re-export their public API via package __init__ imports
+# without a matching __all__ (e.g. PictureItem/TableItem from docling_core.types.doc),
+# which mypy's strict no_implicit_reexport otherwise flags. Third-party modules
+# only; project code still enforces explicit re-exports.
+implicit_reexport = true
 
 # Security scanner
 [tool.bandit]

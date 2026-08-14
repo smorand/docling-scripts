@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pypdfium2
-from docling_core.types.doc.document import PictureItem, TableItem
+from docling_core.types.doc import PictureItem, TableItem
 from docling_core.types.doc.labels import DocItemLabel
 
 logger = logging.getLogger(__name__)

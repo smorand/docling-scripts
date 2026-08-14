@@ -92,7 +92,7 @@ class LlmOcrModel(BaseOcrModel):
 
     def __call__(
         self,
-        conv_res: ConversionResult,  # noqa: ARG002 - required by the docling page-model contract
+        conv_res: ConversionResult,
         page_batch: Iterable[Page],
     ) -> Iterable[Page]:
         """Transcribe every bitmap region of the batch, several requests at a time.
@@ -164,7 +164,7 @@ class LlmOcrModel(BaseOcrModel):
             )
 
         for page_index, page in enumerate(pages):
-            self.post_process_cells(cells_by_page[page_index], page)
+            self.post_process_cells(cells_by_page[page_index], page, conv_res, None)
             yield page
 
 

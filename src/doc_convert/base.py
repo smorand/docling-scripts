@@ -145,7 +145,7 @@ class BaseConverter(ABC):
         import hashlib  # noqa: PLC0415
         import io  # noqa: PLC0415
 
-        from docling_core.types.doc.document import PictureItem  # noqa: PLC0415
+        from docling_core.types.doc import PictureItem  # noqa: PLC0415
 
         figure_map: dict[str, str] = {}
         image_paths: list[Path] = []
@@ -333,7 +333,7 @@ class BaseConverter(ABC):
         """
         import io  # noqa: PLC0415
 
-        from docling_core.types.doc.document import TableItem  # noqa: PLC0415
+        from docling_core.types.doc import TableItem  # noqa: PLC0415
 
         image_paths: list[Path] = []
         item_refs: list[str] = []

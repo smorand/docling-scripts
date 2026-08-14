@@ -84,7 +84,7 @@ def _map_images_to_items(
     doc: object, slide_images: dict[int, list[Path]]
 ) -> tuple[dict[str, str], list[Path], list[str]]:
     """Map python-pptx extracted images to Docling PictureItems by slide + order."""
-    from docling_core.types.doc.document import PictureItem  # noqa: PLC0415
+    from docling_core.types.doc import PictureItem  # noqa: PLC0415
 
     figure_map: dict[str, str] = {}
     image_paths: list[Path] = []

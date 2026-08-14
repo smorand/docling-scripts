@@ -143,7 +143,10 @@ def _model(monkeypatch: pytest.MonkeyPatch, rects_per_page: list[list[BoundingBo
     monkeypatch.setattr(type(model), "get_ocr_rects", lambda _self, _page: queue.pop(0), raising=False)
     processed: list[tuple[list, object]] = []
     monkeypatch.setattr(
-        type(model), "post_process_cells", lambda _self, cells, page: processed.append((cells, page)), raising=False
+        type(model),
+        "post_process_cells",
+        lambda _self, cells, page, _conv_res, _priority=None: processed.append((cells, page)),
+        raising=False,
     )
     return model, processed
 

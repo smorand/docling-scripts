@@ -188,11 +188,13 @@ def request_once(
         return VisionAttempt(reason=f"HTTP {resp.status_code}")
 
     try:
-        content: str = resp.json()["choices"][0]["message"]["content"]
+        content: str | None = resp.json()["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         logger.warning("Vision API returned an unusable body for %s: %s", label, exc)
         return VisionAttempt(reason="malformed response")
-    if not content.strip():
+    # Some providers return content: null (e.g. a refusal or a tool-call-only
+    # response with no text), not just an empty string; treat both as empty.
+    if not content or not content.strip():
         # Some providers return an empty candidate under load; worth one retry.
         return VisionAttempt(retryable=True, reason="empty response")
     return VisionAttempt(text=content)
