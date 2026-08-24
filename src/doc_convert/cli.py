@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+import os
+
+# Must be set before torch/transformers are imported (transitively, via docling below):
+# the RT-DETRv2 layout/figure-classifier model triggers a torch.compile graph break on
+# `Tensor.item()` inside its attention mask check. It's harmless (falls back to eager for
+# that op) but spams stderr on every conversion. Capturing scalar outputs in the compiled
+# graph removes the break instead of just silencing the warning.
+os.environ.setdefault("TORCHDYNAMO_CAPTURE_SCALAR_OUTPUTS", "1")
+
 import logging
 import sys
 from pathlib import Path
