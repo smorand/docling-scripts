@@ -19,7 +19,7 @@ def test_default_settings() -> None:
     assert settings.ibm_ica_model_key == ""
     assert settings.ibm_ica_base_url == ""
     assert settings.google_credentials == ""
-    assert settings.llm_max_tokens == 8192
+    assert settings.llm_max_tokens == 16384
     assert settings.llm_timeout == 120.0
     assert "models" in settings.models_path
 

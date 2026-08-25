@@ -35,10 +35,13 @@ def _png(path: Path, size: tuple[int, int] = (40, 30)) -> Path:
 
 
 class _FakeResponse:
-    def __init__(self, status: int, payload: object = None, text: str = "") -> None:
+    def __init__(
+        self, status: int, payload: object = None, text: str = "", headers: dict[str, str] | None = None
+    ) -> None:
         self.status_code = status
         self._payload = payload
         self.text = text
+        self.headers = headers or {}
 
     @property
     def is_success(self) -> bool:
@@ -104,6 +107,15 @@ def test_request_sends_temperature_zero_and_max_tokens(tmp_path: Path, ibm_setti
     assert payload["model"] == "m"
 
 
+def test_request_bypasses_the_litellm_response_cache(ibm_settings: Settings) -> None:
+    """LiteLLM (fronting IBM ICA) caches responses by request hash: a byte-identical
+    retry of a failed call would replay the same broken cached answer instead of
+    generating a fresh one. Every request must opt out of that cache."""
+    client = _FakeClient(_FakeResponse(200, _ok("desc")))
+    request_once(build_messages("p", "image/png", "b"), "ibm", "m", ibm_settings, "key", client)  # type: ignore[arg-type]
+    assert client.calls[0]["cache"] == {"no-cache": True}
+
+
 def test_encode_image_reports_mime_from_the_prepared_file(tmp_path: Path) -> None:
     mime, b64 = encode_image(_png(tmp_path / "a.png"))
     assert mime == "image/png"
@@ -156,6 +168,28 @@ def test_empty_completion_is_retryable(ibm_settings: Settings) -> None:
     client = _FakeClient(_FakeResponse(200, _ok("   \n ")))
     out = request_once(build_messages("p", "image/png", "b"), "ibm", "m", ibm_settings, "key", client)  # type: ignore[arg-type]
     assert out.retryable is True
+
+
+def test_empty_completion_logs_finish_reason_and_cache_key(
+    ibm_settings: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A thinking model can burn its whole token budget on reasoning before writing
+    any output (finish_reason=length), and LiteLLM may have replayed a cached empty
+    answer (x-litellm-cache-key). Both must be visible in logs, not just "empty"."""
+    payload = {
+        "choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+        "usage": {"completion_tokens_details": {"reasoning_tokens": 7863, "text_tokens": 0}},
+    }
+    client = _FakeClient(_FakeResponse(200, payload, headers={"x-litellm-cache-key": "abc123"}))
+    with caplog.at_level("DEBUG"):
+        out = request_once(
+            build_messages("p", "image/png", "b"), "ibm", "m", ibm_settings, "key", client, label="region 0"
+        )  # type: ignore[arg-type]
+    assert out.retryable is True
+    [record] = [r for r in caplog.records if "empty response diagnostics" in r.message]
+    assert "length" in record.message
+    assert "7863" in record.message
+    assert "abc123" in record.message
 
 
 def test_malformed_body_is_not_retryable(ibm_settings: Settings) -> None:

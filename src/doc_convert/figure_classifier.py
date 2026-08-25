@@ -220,6 +220,57 @@ def _forward(state: _Loaded, images: list[Any]) -> list[FigureClass]:
     ]
 
 
+def _classify_pil_batch(state: _Loaded, images: list[Any]) -> list[FigureClass]:
+    """Classify one chunk of already-decoded RGB images; failures stay UNKNOWN."""
+    if not images:
+        return []
+
+    try:
+        return _forward(state, images)
+    except Exception as exc:
+        logger.warning("Figure classifier failed on a batch of %d image(s), keeping them: %s", len(images), exc)
+        return [UNKNOWN] * len(images)
+
+
+def classify_pil_images(images: list[Any]) -> list[FigureClass]:
+    """Classify already-decoded images (e.g. in-memory PDF crops), same order.
+
+    Shares the model/device/batching with :func:`classify_figures` but skips the
+    file round-trip: callers that already hold pixels (the LLM OCR engine crops
+    bitmap regions straight out of a PDF page) do not have to write a temporary
+    PNG just to satisfy a path-shaped signature. Never raises: on any failure
+    the corresponding entry is ``UNKNOWN``, which is never decorative, so the
+    caller keeps and sends the region as before this filter existed.
+    """
+    if not images:
+        return []
+
+    state = _load()
+    if state is None:
+        return [UNKNOWN] * len(images)
+
+    rgb_images: list[Any] = []
+    for image in images:
+        try:
+            rgb_images.append(image.convert("RGB"))
+        except Exception:
+            logger.warning("Figure classifier: could not convert an in-memory image, keeping the figure")
+            rgb_images.append(None)
+
+    batch_size = _BATCH_SIZE_MPS if state.device == "mps" else _BATCH_SIZE_CPU
+    verdicts: list[FigureClass] = [UNKNOWN] * len(rgb_images)
+    positions = [i for i, img in enumerate(rgb_images) if img is not None]
+    to_classify = [rgb_images[i] for i in positions]
+
+    predictions: list[FigureClass] = []
+    for start in range(0, len(to_classify), batch_size):
+        predictions.extend(_classify_pil_batch(state, to_classify[start : start + batch_size]))
+
+    for position, prediction in zip(positions, predictions, strict=True):
+        verdicts[position] = prediction
+    return verdicts
+
+
 def _classify_batch(state: _Loaded, paths: list[Path]) -> list[FigureClass]:
     """Classify one chunk of images; unreadable or failing images stay UNKNOWN."""
     from PIL import Image  # noqa: PLC0415

@@ -9,8 +9,15 @@ from docling_core.types.doc.base import BoundingBox
 from PIL import Image
 
 from config import Settings
+from doc_convert.figure_classifier import UNKNOWN, FigureClass
 from doc_convert.formats import OcrLlm, OcrLocal, OcrOff
 from doc_convert.ocr_llm import LlmOcrModel, LlmOcrOptions, register_llm_ocr
+
+
+def _keep_everything(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests unrelated to the decorative filter should not load the real model:
+    every region is classified UNKNOWN, which is never decorative (fail-open)."""
+    monkeypatch.setattr("doc_convert.figure_classifier.classify_pil_images", lambda images: [UNKNOWN] * len(images))
 
 
 def test_llm_ocr_options_kind_and_fields() -> None:
@@ -156,6 +163,7 @@ def test_regions_are_cropped_on_the_calling_thread(monkeypatch: pytest.MonkeyPat
     touched from a worker. Only the API calls are allowed to fan out."""
     monkeypatch.setattr("config.Settings", lambda: ibm_settings)
     monkeypatch.setattr("doc_convert.vision_llm.describe_encoded", lambda *a, **k: "text")
+    _keep_everything(monkeypatch)
 
     backends = [_FakeBackend(), _FakeBackend()]
     pages = [_FakePage(b) for b in backends]
@@ -175,6 +183,7 @@ def test_each_region_lands_on_its_own_page(monkeypatch: pytest.MonkeyPatch, ibm_
     """Completion order is nondeterministic; a region's text must not migrate to
     another page."""
     monkeypatch.setattr("config.Settings", lambda: ibm_settings)
+    _keep_everything(monkeypatch)
     seen: dict[str, str] = {}
 
     def fake(_mime: str, b64: str, *_a: object, **kwargs: object) -> str:
@@ -198,6 +207,7 @@ def test_one_failed_region_does_not_lose_the_others(monkeypatch: pytest.MonkeyPa
     """The previous implementation dropped a region on any exception with no retry,
     and a single ReadTimeout silently lost a whole page of text on a 20-page scan."""
     monkeypatch.setattr("config.Settings", lambda: ibm_settings)
+    _keep_everything(monkeypatch)
     calls = {"n": 0}
 
     def fake(*_a: object, **_k: object) -> str:
@@ -218,12 +228,65 @@ def test_one_failed_region_does_not_lose_the_others(monkeypatch: pytest.MonkeyPa
 def test_zero_area_regions_are_skipped(monkeypatch: pytest.MonkeyPatch, ibm_settings: Settings) -> None:
     monkeypatch.setattr("config.Settings", lambda: ibm_settings)
     monkeypatch.setattr("doc_convert.vision_llm.describe_encoded", lambda *a, **k: "text")
+    _keep_everything(monkeypatch)
     pages = [_FakePage(_FakeBackend())]
     model, processed = _model(monkeypatch, [[_rect(area=0.0), _rect()]])
 
     list(model(None, pages))
 
     assert len(processed[0][0]) == 1
+
+
+def test_decorative_region_is_skipped_without_calling_the_api(
+    monkeypatch: pytest.MonkeyPatch, ibm_settings: Settings
+) -> None:
+    """A logo/icon/stamp region reasons its way to a correct empty transcription,
+    but that costs a paid vision call and logs a misleading failure. It must never
+    reach describe_encoded, and it must not produce a text cell."""
+    monkeypatch.setattr("config.Settings", lambda: ibm_settings)
+
+    def boom(*_a: object, **_k: object) -> str:
+        raise AssertionError("a decorative region must never reach the vision API")
+
+    monkeypatch.setattr("doc_convert.vision_llm.describe_encoded", boom)
+    monkeypatch.setattr(
+        "doc_convert.figure_classifier.classify_pil_images",
+        lambda images: [FigureClass(label="logo", confidence=0.9, decorative_mass=0.95) for _ in images],
+    )
+    pages = [_FakePage(_FakeBackend())]
+    model, processed = _model(monkeypatch, [[_rect()]])
+
+    list(model(None, pages))
+
+    assert processed[0][0] == []
+
+
+def test_mixed_decorative_and_text_regions_keeps_only_text(
+    monkeypatch: pytest.MonkeyPatch, ibm_settings: Settings
+) -> None:
+    """One decorative and one real region on the same page: only the real one is
+    sent to the API and survives as a text cell."""
+    monkeypatch.setattr("config.Settings", lambda: ibm_settings)
+    calls: list[str] = []
+
+    def fake(*_a: object, **kwargs: object) -> str:
+        calls.append(str(kwargs.get("label", "")))
+        return "real text"
+
+    monkeypatch.setattr("doc_convert.vision_llm.describe_encoded", fake)
+    monkeypatch.setattr(
+        "doc_convert.figure_classifier.classify_pil_images",
+        lambda images: [FigureClass(label="logo", confidence=0.9, decorative_mass=0.95), UNKNOWN][: len(images)],
+    )
+    pages = [_FakePage(_FakeBackend())]
+    model, processed = _model(monkeypatch, [[_rect(), _rect()]])
+
+    list(model(None, pages))
+
+    cells, _ = processed[0]
+    assert len(calls) == 1, "only the non-decorative region calls the API"
+    assert len(cells) == 1
+    assert cells[0].index == 1
 
 
 def test_invalid_backend_page_is_passed_through(monkeypatch: pytest.MonkeyPatch, ibm_settings: Settings) -> None:

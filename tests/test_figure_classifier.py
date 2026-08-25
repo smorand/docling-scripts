@@ -130,6 +130,83 @@ def test_load_failure_is_remembered_and_warned_once(
     assert "figure classifier unavailable" in warnings[0].getMessage()
 
 
+# ---------------------------------------------------------------------------
+# In-memory classification (LLM OCR crops never touch disk)
+# ---------------------------------------------------------------------------
+
+
+def test_classify_pil_empty_list_never_loads_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom() -> None:
+        raise AssertionError("_load must not be called for an empty input")
+
+    monkeypatch.setattr(fc, "_load", boom)
+    assert fc.classify_pil_images([]) == []
+
+
+def test_classify_pil_returns_unknown_when_model_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from PIL import Image  # noqa: PLC0415
+
+    monkeypatch.setattr(fc, "_load", lambda: None)
+    images = [Image.new("RGB", (10, 10)), Image.new("RGB", (10, 10))]
+    verdicts = fc.classify_pil_images(images)
+    assert verdicts == [fc.UNKNOWN, fc.UNKNOWN]
+
+
+def test_classify_pil_batches_and_preserves_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verdicts line up 1:1 with the input images across batch boundaries, same
+    contract as the path-based entry point used by the caption filter."""
+    from PIL import Image  # noqa: PLC0415
+
+    images = [Image.new("RGB", (10, 10), (i, i, i)) for i in range(20)]
+    state = fc._Loaded(processor=object(), model=object(), device="cpu", torch=object())
+    monkeypatch.setattr(fc, "_load", lambda: state)
+
+    seen_batches: list[int] = []
+
+    def fake_forward(_state: fc._Loaded, chunk: list[object]) -> list[fc.FigureClass]:
+        seen_batches.append(len(chunk))
+        return [fc.FigureClass(label=str(i), confidence=1.0) for i in range(len(chunk))]
+
+    monkeypatch.setattr(fc, "_forward", fake_forward)
+    verdicts = fc.classify_pil_images(images)
+
+    assert len(verdicts) == 20
+    assert seen_batches == [8, 8, 4]
+
+
+def test_classify_pil_keeps_everything_when_forward_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    from PIL import Image  # noqa: PLC0415
+
+    state = fc._Loaded(processor=object(), model=object(), device="cpu", torch=object())
+    monkeypatch.setattr(fc, "_load", lambda: state)
+
+    def boom(_state: fc._Loaded, _images: list[object]) -> list[fc.FigureClass]:
+        raise RuntimeError("model exploded")
+
+    monkeypatch.setattr(fc, "_forward", boom)
+    images = [Image.new("RGB", (10, 10)), Image.new("RGB", (10, 10))]
+    verdicts = fc.classify_pil_images(images)
+    assert verdicts == [fc.UNKNOWN, fc.UNKNOWN]
+
+
+def test_classify_pil_keeps_unconvertible_images(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An image that cannot be converted to RGB stays UNKNOWN, others are still
+    classified."""
+    from PIL import Image  # noqa: PLC0415
+
+    class _Unconvertible:
+        def convert(self, _mode: str) -> None:
+            raise OSError("broken image")
+
+    state = fc._Loaded(processor=object(), model=object(), device="cpu", torch=object())
+    monkeypatch.setattr(fc, "_load", lambda: state)
+    monkeypatch.setattr(fc, "_forward", lambda _state, chunk: [fc.FigureClass(label="x", confidence=1.0)] * len(chunk))
+
+    verdicts = fc.classify_pil_images([_Unconvertible(), Image.new("RGB", (10, 10))])
+    assert verdicts[0] == fc.UNKNOWN
+    assert verdicts[1].label == "x"
+
+
 def test_classify_batches_and_preserves_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Verdicts must line up 1:1 with the input paths across batch boundaries."""
     paths = [_make_png(tmp_path / f"f{i}.png") for i in range(20)]

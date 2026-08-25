@@ -66,6 +66,16 @@ class _OcrJob:
     b64: str
 
 
+@dataclass(frozen=True)
+class _OcrCrop:
+    """One bitmap region right after cropping, before classification/encoding."""
+
+    page_index: int
+    index: int
+    rect: BoundingBox
+    image: object
+
+
 class LlmOcrModel(BaseOcrModel):
     """OCR model that transcribes each bitmap region with a cloud LLM."""
 
@@ -108,6 +118,7 @@ class LlmOcrModel(BaseOcrModel):
             return
 
         from config import Settings  # noqa: PLC0415
+        from doc_convert.figure_classifier import classify_pil_images  # noqa: PLC0415
         from doc_convert.providers import DEFAULT_LLM_CONCURRENCY, get_ocr_prompt, require_api_key  # noqa: PLC0415
         from doc_convert.vision_llm import describe_encoded, encode_pil, make_client, map_concurrent  # noqa: PLC0415
 
@@ -116,16 +127,40 @@ class LlmOcrModel(BaseOcrModel):
         api_key = require_api_key(self.options.provider, settings)
 
         pages = list(page_batch)
-        jobs: list[_OcrJob] = []
+        crops: list[_OcrCrop] = []
         for page_index, page in enumerate(pages):
             if page._backend is None or not page._backend.is_valid():
                 continue
             for idx, ocr_rect in enumerate(self.get_ocr_rects(page)):
                 if ocr_rect.area() == 0:
                     continue
-                crop = page._backend.get_page_image(scale=self.scale, cropbox=ocr_rect)
-                mime, b64 = encode_pil(crop, label=f"ocr region {idx}")
-                jobs.append(_OcrJob(page_index=page_index, index=idx, rect=ocr_rect, mime=mime, b64=b64))
+                bitmap = page._backend.get_page_image(scale=self.scale, cropbox=ocr_rect)
+                crops.append(_OcrCrop(page_index=page_index, index=idx, rect=ocr_rect, image=bitmap))
+
+        # Decorative-region filter (shares the caption filter's Stage B1 model):
+        # a purely graphical bitmap (a logo, an icon, a stamp) reasons its way to
+        # a correct empty transcription, but that costs a paid vision call and
+        # then logs a misleading "LLM OCR returned nothing" warning as if it were
+        # a failure. Skipping it here costs no accuracy: docling's own text
+        # extraction is untouched, and a real text-bearing region is never
+        # classified this confidently decorative. Fails open: an unavailable
+        # classifier keeps and sends every region exactly as before this filter.
+        verdicts = classify_pil_images([c.image for c in crops])
+        jobs: list[_OcrJob] = []
+        for ocr_crop, verdict in zip(crops, verdicts, strict=True):
+            if verdict.is_decorative:
+                logger.debug(
+                    "OCR region %d on page %d skipped: decorative (%s, mass=%.2f)",
+                    ocr_crop.index,
+                    ocr_crop.page_index + 1,
+                    verdict.label,
+                    verdict.decorative_mass,
+                )
+                continue
+            mime, b64 = encode_pil(ocr_crop.image, label=f"ocr region {ocr_crop.index}")
+            jobs.append(
+                _OcrJob(page_index=ocr_crop.page_index, index=ocr_crop.index, rect=ocr_crop.rect, mime=mime, b64=b64)
+            )
 
         texts: list[str] = []
         if jobs:

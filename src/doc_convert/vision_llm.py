@@ -173,6 +173,17 @@ def request_once(
                 "temperature": _TEMPERATURE,
                 "max_tokens": settings.llm_max_tokens,
                 "messages": messages,
+                # LiteLLM (fronting IBM ICA) caches responses by request hash. A
+                # provider "hiccup" that returns HTTP 200 with an empty candidate
+                # gets cached like any other response, so a byte-identical retry
+                # (same image + same prompt + temperature 0) silently replays the
+                # same empty answer instead of generating a fresh one: measured
+                # in prod, 3-4 "retries" of the same OCR region shared one
+                # x-litellm-cache-key and answered in 1-10ms, not the several
+                # seconds a real vision call takes. This field is LiteLLM's
+                # documented per-request cache bypass; providers that don't
+                # recognize it (google, openrouter) ignore unknown JSON fields.
+                "cache": {"no-cache": True},
             },
         )
     except httpx.HTTPError as exc:
@@ -188,7 +199,8 @@ def request_once(
         return VisionAttempt(reason=f"HTTP {resp.status_code}")
 
     try:
-        content: str | None = resp.json()["choices"][0]["message"]["content"]
+        body = resp.json()
+        content: str | None = body["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         logger.warning("Vision API returned an unusable body for %s: %s", label, exc)
         return VisionAttempt(reason="malformed response")
@@ -196,6 +208,28 @@ def request_once(
     # response with no text), not just an empty string; treat both as empty.
     if not content or not content.strip():
         # Some providers return an empty candidate under load; worth one retry.
+        # Diagnostics for the two known root causes: a thinking model (e.g.
+        # gemini-3.1-pro-preview) can burn its entire max_tokens budget on
+        # internal reasoning before writing any output (finish_reason=length,
+        # completion_tokens_details.text_tokens near zero), and LiteLLM's
+        # response cache can silently replay a prior empty answer to a
+        # byte-identical retry (same cache-key, sub-10ms response). Logging
+        # both here turns a bare empty-response warning into an actionable signal.
+        finish_reason = None
+        usage = None
+        try:
+            finish_reason = body["choices"][0].get("finish_reason")
+            usage = body.get("usage", {}).get("completion_tokens_details")
+        except (AttributeError, KeyError, IndexError, TypeError):
+            pass
+        cache_key = resp.headers.get("x-litellm-cache-key")
+        logger.debug(
+            "%s empty response diagnostics: finish_reason=%s completion_tokens_details=%s litellm_cache_key=%s",
+            label,
+            finish_reason,
+            usage,
+            cache_key,
+        )
         return VisionAttempt(retryable=True, reason="empty response")
     return VisionAttempt(text=content)
 

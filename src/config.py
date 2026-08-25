@@ -30,5 +30,5 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
     notes_api_url: str = "https://notes.mcp.scm-platform.org"
-    llm_max_tokens: int = 8192
+    llm_max_tokens: int = 16384
     llm_timeout: float = 120.0
