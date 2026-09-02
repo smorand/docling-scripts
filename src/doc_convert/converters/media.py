@@ -131,27 +131,38 @@ class MediaConverter(BaseConverter):
         prompt: str,
         base_system: str | None,
     ) -> str:
-        """Transcribe each overlapping part, carrying speaker context across seams."""
+        """Transcribe overlapping parts in parallel, preserving chronological order."""
+        import concurrent.futures  # noqa: PLC0415
+
         from media_llm import process_media  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415
         from video import format_timestamp  # noqa: PLC0415
 
-        transcripts: list[tuple[AudioPart, str]] = []
-        prev_tail = ""
-        for part in parts:
+        workers = min(len(parts), max(1, self.options.llm_concurrency))
+
+        def _transcribe_single_part(part: AudioPart) -> tuple[AudioPart, str]:
             system = base_system or ""
-            if prev_tail:
-                system = (
-                    f"{system}\n\nCONTINUITY: this is part {part.index + 1} of a recording split into "
-                    f'{len(parts)} parts. The previous part ended with:\n"""\n{prev_tail}\n"""\n'
-                    "Its first ~1 minute overlaps the previous part; transcribe that overlap in full "
-                    "anyway. Keep speaker names/labels consistent with the previous part."
+            part_info = (
+                f"\n\nPART INFO: this is part {part.index + 1} of {len(parts)} of a continuous recording "
+                f"({format_timestamp(part.start_s)} to {format_timestamp(part.end_s)})."
+            )
+            if part.index > 0:
+                part_info += (
+                    " Its first ~1 minute overlaps the previous part; transcribe that overlap in full. "
+                    "Keep speaker names/labels consistent across the recording."
                 )
+            system += part_info
+
             with trace_span("audio.transcribe.part", file=part.path.name, provider=provider, part=part.index + 1):
-                logger.info("Transcribing part %d/%d", part.index + 1, len(parts))
+                logger.info("Transcribing part %d/%d (%s)", part.index + 1, len(parts), part.path.name)
                 text = process_media(part.path, provider, model, prompt, api_key, system_prompt=system, url=url)
-            transcripts.append((part, text.strip()))
-            prev_tail = text.strip()[-800:]
+            return part, text.strip()
+
+        if workers <= 1:
+            transcripts = [_transcribe_single_part(p) for p in parts]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                transcripts = list(executor.map(_transcribe_single_part, parts))
 
         note = (
             f"> **Note:** this recording was split into {len(parts)} parts to fit the transcription "
@@ -168,7 +179,9 @@ class MediaConverter(BaseConverter):
         return "\n".join(out).rstrip() + "\n"
 
     def _extract_video_content(self, provider: str, model: str, api_key: str, url: str | None) -> str:
-        """Run video extraction, chunking the source past CHUNK_THRESHOLD_SECONDS."""
+        """Run video extraction, chunking the source past CHUNK_THRESHOLD_SECONDS in parallel."""
+        import concurrent.futures  # noqa: PLC0415
+
         from media_llm import process_media  # noqa: PLC0415
         from tracing import trace_span  # noqa: PLC0415
         from video import (  # noqa: PLC0415
@@ -188,14 +201,20 @@ class MediaConverter(BaseConverter):
                 return process_media(self.source, provider, model, prompt, api_key, system_prompt=system, url=url)
 
         chunk_paths = chunk_video(self.source)
-        chunk_summaries: list[str] = []
-        for i, chunk in enumerate(chunk_paths):
+        workers = min(len(chunk_paths), max(1, self.options.llm_concurrency))
+
+        def _process_chunk(idx_chunk: tuple[int, Path]) -> str:
+            i, chunk = idx_chunk
             start_s = i * (duration / max(1, len(chunk_paths)))
             with trace_span("video.extract.chunk", file=chunk.name, provider=provider, chunk=i + 1):
                 logger.info("Processing chunk %d/%d (~%s)", i + 1, len(chunk_paths), format_timestamp(start_s))
-                chunk_summaries.append(
-                    process_media(chunk, provider, model, prompt, api_key, system_prompt=system, url=url)
-                )
+                return process_media(chunk, provider, model, prompt, api_key, system_prompt=system, url=url)
+
+        if workers <= 1:
+            chunk_summaries = [_process_chunk((i, c)) for i, c in enumerate(chunk_paths)]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                chunk_summaries = list(executor.map(_process_chunk, enumerate(chunk_paths)))
 
         # Meta-summary: text-only call (no need to resend the video)
         joined_chunks = "\n\n".join(
