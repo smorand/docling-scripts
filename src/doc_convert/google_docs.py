@@ -40,7 +40,7 @@ def _load_google_credentials(settings: Settings) -> str:
     """Load Google credentials and return an access token."""
     creds_path = settings.google_credentials
     if not creds_path:
-        console.print("[red]GOOGLE_CREDENTIALS env var is required for Google Docs/Sheets[/red]")
+        console.print("[red]DOC_CONVERT_GOOGLE_CREDENTIALS env var is required for Google Docs/Sheets[/red]")
         raise typer.Exit(1)
 
     creds_file = Path(os.path.expandvars(creds_path)).expanduser()

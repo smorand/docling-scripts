@@ -19,7 +19,7 @@ doc-convert --download-models                          # download smolvlm (defau
 doc-convert --download-models --captions qwen          # specific preset
 ```
 
-Models are stored in `~/.cache/models/` (override with `MODELS_PATH` env var).
+Models are stored in `~/.cache/models/` (override with `DOC_CONVERT_MODELS_PATH` env var).
 Local captioner presets: `smolvlm`, `granite_vision`, `pixtral`, `qwen`.
 
 ## Usage
@@ -30,9 +30,9 @@ All conversions write to a `<name>_docling/` directory with `document.md` as the
 
 - `--llm <provider/model>` — remote model identity. Used for captions, document analysis, PDF/image `--engine llm`, and as fallback for media when `--media-llm` is not given. For image inputs only, if omitted, `doc-convert` now defaults to `ibm/claude-sonnet-4-5`.
 - `--media-llm <provider/model>` — overrides the LLM used for audio/video conversion and media analysis only. Precedence: `--media-llm` > `--llm` > a per-type default. **Audio defaults to `ibm/gemini-3.1-pro-preview`**: audio is normalised to a compact mono 16 kHz OGG Opus copy and split with overlap when needed (see below), so it fits the inline payload limit and runs on the single IBM credential. **Video defaults to `google/gemini-3.1-pro-preview`**: it uploads via the Gemini Files API (no size limit), which large video needs since `ibm/` and `openrouter/` send inline base64.
-- `--captions <value>` — figure captioner. Value is `off`, a local preset (`smolvlm`, `granite_vision`, `pixtral`, `qwen`), or a `provider/model` slug. Defaults: same as `--llm` if set, else `ibm/claude-sonnet-4-5` if `IBM_ICA_MODEL_KEY` + `IBM_ICA_BASE_URL` are configured, else local `smolvlm`.
+- `--captions <value>` — figure captioner. Value is `off`, a local preset (`smolvlm`, `granite_vision`, `pixtral`, `qwen`), or a `provider/model` slug. Defaults: same as `--llm` if set, else `ibm/claude-sonnet-4-5` if `DOC_CONVERT_IBM_ICA_MODEL_KEY` + `DOC_CONVERT_IBM_ICA_BASE_URL` are configured, else local `smolvlm`.
 - `--engine local|llm` — PDF/image body extraction. `local` (default) uses Docling layout + OCR + tables. `llm` rasterizes each page and sends it to `--llm` (whole document is described by the model). Images always use `llm`, and now default to `ibm/claude-sonnet-4-5` when `--llm` is omitted.
-- `--ocr-model <value>` — OCR engine for the `--engine local` PDF pipeline. OCR is the per-region "text from bitmap" stage; it only fires on scanned/image content, so born-digital PDFs are unaffected (and incur no LLM cost even with the LLM default). Value is `off` (alias for `--no-ocr`), `local` (Tesseract CLI via the system `tesseract` binary), or a `provider/model` slug to read each image region with a cloud LLM. **Default: `ibm/gemini-3.1-pro-preview`** (IBM ICA fronts Gemini, so no separate `GOOGLE_API_KEY` is needed; per-region crops go inline, so the missing Files API on `ibm/` is irrelevant here). Unlike `--captions`, it does **not** auto-inherit `--llm`. For fully-scanned documents prefer `--engine llm` (reads whole pages); LLM OCR shines on mostly-digital docs with small embedded image-text. The `local` engine needs the `tesseract` binary, plus language packs (`brew install tesseract-lang`) for anything beyond the bundled `eng`.
+- `--ocr-model <value>` — OCR engine for the `--engine local` PDF pipeline. OCR is the per-region "text from bitmap" stage; it only fires on scanned/image content, so born-digital PDFs are unaffected (and incur no LLM cost even with the LLM default). Value is `off` (alias for `--no-ocr`), `local` (Tesseract CLI via the system `tesseract` binary), or a `provider/model` slug to read each image region with a cloud LLM. **Default: `ibm/gemini-3.1-pro-preview`** (IBM ICA fronts Gemini, so no separate `DOC_CONVERT_GOOGLE_API_KEY` is needed; per-region crops go inline, so the missing Files API on `ibm/` is irrelevant here). Unlike `--captions`, it does **not** auto-inherit `--llm`. For fully-scanned documents prefer `--engine llm` (reads whole pages); LLM OCR shines on mostly-digital docs with small embedded image-text. The `local` engine needs the `tesseract` binary, plus language packs (`brew install tesseract-lang`) for anything beyond the bundled `eng`.
 - `--no-caption-filter` — turns off the caption filter, which is **on by default** and skips figures that cannot carry information before any captioner is paid. Two stages: a native size floor (anything under 64px on either axis) and docling's own figure classifier, which drops confidently decorative artwork (`logo`, `icon`, `qr_code`, `bar_code`, `stamp`, `signature` at ≥0.8 confidence). Skipped figures disappear from `document.md` and `images.md`; their PNG stays in `figures/` so you can audit what was filtered. On real client decks this removes 25-56% of caption calls (corporate and vendor logos, pictograms) with no content loss. Everything fails open: an unreadable image, a missing model, or a hesitant classification means "caption it anyway". See [Caption filter](#caption-filter).
 
 ### Vision calls run in parallel
@@ -246,12 +246,12 @@ doc-convert scan.png
 doc-convert scan.png --llm google/gemini-3.1-pro-preview
 ```
 
-If `--llm` is omitted for a direct image input, `doc-convert` now uses `ibm/claude-sonnet-4-5` by default.
+If `--llm` is omitted for a direct image input, `doc-convert` now uses `ibm/gemini-3.7-flash` by default.
 
 ### Audio
 
 ```bash
-# Transcription with speaker diarization (defaults to ibm/gemini-3.1-pro-preview)
+# Transcription with speaker diarization (defaults to ibm/gemini-3.7-flash)
 # Any audio format works, incl. .opus; it is normalised to a compact ogg first.
 doc-convert meeting.ogg
 
@@ -348,11 +348,11 @@ doc-convert invoice.pdf --note --note-force
 
 | Provider | Format | API Key | Extra |
 |---|---|---|---|
-| Google GenAI | `google/<model>` | `GOOGLE_API_KEY` | |
-| OpenRouter | `openrouter/<model>` | `OPENROUTER_API_KEY` | |
-| IBM ICA (OpenAI-compatible) | `ibm/<model>` | `IBM_ICA_MODEL_KEY` | requires `IBM_ICA_BASE_URL` |
+| Google GenAI | `google/<model>` | `DOC_CONVERT_GOOGLE_API_KEY` | |
+| OpenRouter | `openrouter/<model>` | `DOC_CONVERT_OPENROUTER_API_KEY` | |
+| IBM ICA (OpenAI-compatible) | `ibm/<model>` | `DOC_CONVERT_IBM_ICA_MODEL_KEY` | requires `DOC_CONVERT_IBM_ICA_BASE_URL` |
 
-Media defaults depend on the type when `--media-llm`/`--llm` is not given: **audio → `ibm/gemini-3.1-pro-preview`**, **video → `google/gemini-3.1-pro-preview`**.
+Media defaults depend on the type when `--media-llm`/`--llm` is not given: **audio → `ibm/gemini-3.7-flash`**, **video → `google/gemini-3.7-flash`**.
 
 Audio is first normalised to a compact mono 16 kHz OGG Opus copy (~14 MB/h) and, for inline providers (`ibm/`, `openrouter/`), split into 1-minute-overlapping parts when it would exceed the inline payload limit (~50 MB), so it always fits and can run on the single IBM credential. Video uses the `google/` Gemini Files API (upload then generate), which has no payload size limit — needed because `ibm/` and `openrouter/` send media inline (base64) and large video would fail with a 502.
 
@@ -367,14 +367,21 @@ Audio is first normalised to a compact mono 16 kHz OGG Opus copy (~14 MB/h) and,
 
 ## Environment Variables
 
+All configuration variables are prefixed with `DOC_CONVERT_`:
+
 | Variable | Required for | Purpose |
 |---|---|---|
-| `MODELS_PATH` | Local captioner | Model cache directory (default: `~/.cache/models`) |
-| `GOOGLE_API_KEY` | `google/` provider | Google GenAI API key |
-| `OPENROUTER_API_KEY` | `openrouter/` provider | OpenRouter API key |
-| `IBM_ICA_MODEL_KEY` | `ibm/` provider | IBM ICA API key (OpenAI-compatible) |
-| `IBM_ICA_BASE_URL` | `ibm/` provider | IBM ICA base URL (e.g. `https://api.nextgen-beta.ica.ibm.com/ica/v1`) |
-| `GOOGLE_CREDENTIALS` | Google Docs/Sheets URLs | Path to Google credentials JSON |
+| `DOC_CONVERT_MODELS_PATH` | Local captioner | Model cache directory (default: `~/.cache/models`) |
+| `DOC_CONVERT_GOOGLE_API_KEY` | `google/` provider | Google GenAI API key |
+| `DOC_CONVERT_OPENROUTER_API_KEY` | `openrouter/` provider | OpenRouter API key |
+| `DOC_CONVERT_IBM_ICA_MODEL_KEY` | `ibm/` provider | IBM ICA API key (OpenAI-compatible) |
+| `DOC_CONVERT_IBM_ICA_BASE_URL` | `ibm/` provider | IBM ICA base URL (e.g. `https://api.servicesessentials.ibm.com/v1`) |
+| `DOC_CONVERT_GOOGLE_CREDENTIALS` | Google Docs/Sheets URLs | Path to Google credentials JSON |
+| `DOC_CONVERT_GOOGLE_CLIENT_ID` | `--note` | Google OAuth client ID for Apple Notes API |
+| `DOC_CONVERT_GOOGLE_CLIENT_SECRET` | `--note` | Google OAuth client secret for Apple Notes API |
+| `DOC_CONVERT_NOTES_API_URL` | `--note` | Notes API base URL (default: `https://notes.mcp.scm-platform.org`) |
+| `DOC_CONVERT_LLM_MAX_TOKENS` | Optional | Max tokens for LLM generation (default: `16384`) |
+| `DOC_CONVERT_LLM_TIMEOUT` | Optional | LLM HTTP timeout in seconds (default: `120.0`) |
 
 ## Development
 

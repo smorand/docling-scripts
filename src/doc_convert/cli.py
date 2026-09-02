@@ -939,7 +939,7 @@ def _run_media(
     ``media_llm`` (if set) overrides the model used for the actual media
     payload (audio/video → LLM). Otherwise falls back to ``llm`` then to the
     media default. ``companion_llm`` overrides the model for companion context
-    analysis (multimodal, default ibm/gemini-3.1-pro-preview).
+    analysis (multimodal, default ibm/gemini-3.7-flash).
     """
     from doc_convert.companion import load_companion_context  # noqa: PLC0415
     from doc_convert.converters.media import MediaConverter  # noqa: PLC0415

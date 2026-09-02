@@ -38,7 +38,7 @@ def _make_pptx(tmp_path: Path, *, notes: dict[int, str]) -> Path:
 
 def test_default_model_is_confirmed_ibm_sonnet() -> None:
     # Confirmed present via IBM ICA's GET /models (see providers.DEFAULT_PPTX_SLIDE_VLM).
-    assert DEFAULT_PPTX_SLIDE_VLM == "ibm/claude-sonnet-4-6"
+    assert DEFAULT_PPTX_SLIDE_VLM == "ibm/gemini-3.7-flash"
 
 
 def test_extract_slide_notes_returns_only_nonempty(tmp_path: Path) -> None:

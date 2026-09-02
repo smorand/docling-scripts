@@ -72,7 +72,7 @@ def test_resolve_captions_llm_fallback(empty_settings: Settings) -> None:
 def test_resolve_captions_auto_prefers_credentialed_cloud(ibm_settings: Settings) -> None:
     # No --captions, no --llm: first cloud preference with creds is picked.
     spec = resolve_captions(None, None, ibm_settings)
-    assert spec == CaptionsLlm("ibm", "claude-sonnet-4-5")
+    assert spec == CaptionsLlm("ibm", "gemini-3.7-flash")
 
 
 def test_resolve_captions_local_default_when_only_google(google_settings: Settings) -> None:
@@ -108,7 +108,7 @@ def test_parse_ocr_model_invalid() -> None:
 
 
 def test_resolve_ocr_model_default_is_gemini() -> None:
-    assert resolve_ocr_model(None, no_ocr=False) == OcrLlm("ibm", "gemini-3.1-pro-preview")
+    assert resolve_ocr_model(None, no_ocr=False) == OcrLlm("ibm", "gemini-3.7-flash")
 
 
 def test_resolve_ocr_model_local_uses_tesseract() -> None:

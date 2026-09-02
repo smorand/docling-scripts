@@ -472,7 +472,7 @@ class BaseConverter(ABC):
         overridden by custom instructions via --analyze-prompt.
 
         Args:
-            llm: Provider/model override (default: ibm/claude-opus-4-8)
+            llm: Provider/model override (default: ibm/gemini-3.7-flash)
             instructions: Custom prompt (overrides the default analysis prompt entirely)
             meeting: Context to inject into the prompt
             lang: Output language (e.g. "fr", "en"). None = auto-detect from document.

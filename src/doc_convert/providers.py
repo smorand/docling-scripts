@@ -218,31 +218,29 @@ RETRY_BACKOFF_SECONDS: tuple[float, ...] = (5.0, 15.0, 45.0)
 
 # Video default uses google/ (Gemini Files API: upload → generate), which has no
 # payload size limit. Inline-base64 providers (ibm/, openrouter/) fail with 502
-# on large video. gemini-3-pro-preview was retired on the Google API ("no longer
-# available"); gemini-3.1-pro-preview is its current successor.
-DEFAULT_MEDIA_LLM = "google/gemini-3.1-pro-preview"
+# on large video.
+DEFAULT_MEDIA_LLM = "google/gemini-3.7-flash"
 
 # Audio defaults to ibm/ (IBM ICA fronts Gemini): audio is normalised to mono
 # 16 kHz ogg and split when needed (see audio_prep) so it always fits the inline
 # payload limit, letting transcription run on the single IBM credential without
-# GOOGLE_API_KEY.
-DEFAULT_AUDIO_LLM = "ibm/gemini-3.1-pro-preview"
+# DOC_CONVERT_GOOGLE_API_KEY.
+DEFAULT_AUDIO_LLM = "ibm/gemini-3.7-flash"
 
 # Default model for the `--analyze` text-only analysis pass on documents.
 # Picked for reasoning quality on long markdown context. Document analysis only
 # sends text, so any provider works (no Files API constraint).
-DEFAULT_DOCUMENT_ANALYSIS_LLM = "ibm/claude-opus-4-8"
+DEFAULT_DOCUMENT_ANALYSIS_LLM = "ibm/gemini-3.7-flash"
 
 # Default model for companion context analysis. Must be multimodal (companion
 # notes often reference screenshots/whiteboard captures sent inline). Gemini
-# 3.1 Pro via IBM ICA is used because it supports vision and is already the
+# 3.7 Flash via IBM ICA is used because it supports vision and is already the
 # default for audio transcription.
-DEFAULT_COMPANION_LLM = "ibm/gemini-3.1-pro-preview"
+DEFAULT_COMPANION_LLM = "ibm/gemini-3.7-flash"
 
 # Default model for the PPTX whole-slide screenshot visual interpretation pass
-# (see pptx_slide_vlm.py). Confirmed available via IBM ICA's GET /models:
-# 'claude-sonnet-4-6' is listed alongside claude-sonnet-4-5/claude-opus-4-8.
-DEFAULT_PPTX_SLIDE_VLM = "ibm/claude-sonnet-4-6"
+# (see pptx_slide_vlm.py).
+DEFAULT_PPTX_SLIDE_VLM = "ibm/gemini-3.7-flash"
 
 # How many per-image vision calls run at once, for both figure captions and PPTX
 # slide screenshots. Each is an independent ~8-20 s HTTPS round trip, so a deck
@@ -266,8 +264,8 @@ DEFAULT_LLM_CONCURRENCY = 8
 
 # Default model for image conversion when the input itself is an image and the
 # user did not pass --llm. Images always go through the external VLM pipeline,
-# so we auto-fill a small IBM-hosted Claude model instead of hard-failing.
-DEFAULT_IMAGE_LLM = "ibm/claude-sonnet-4-5"
+# so we auto-fill a fast IBM-hosted multimodal model instead of hard-failing.
+DEFAULT_IMAGE_LLM = "ibm/gemini-3.7-flash"
 
 
 def get_provider_url(provider: str, settings: Settings) -> str:
@@ -276,7 +274,7 @@ def get_provider_url(provider: str, settings: Settings) -> str:
         return PROVIDER_URLS[provider]
     if provider == "ibm":
         if not settings.ibm_ica_base_url:
-            console.print("[red]IBM_ICA_BASE_URL env var is required for ibm/ provider[/red]")
+            console.print("[red]DOC_CONVERT_IBM_ICA_BASE_URL env var is required for ibm/ provider[/red]")
             raise typer.Exit(1)
         return f"{settings.ibm_ica_base_url.rstrip('/')}/chat/completions"
     console.print(f"[red]Unknown provider: {provider}[/red]")
@@ -308,17 +306,17 @@ def require_api_key(provider: str, settings: Settings) -> str:
     """Get the API key for a provider, or exit with error."""
     if provider == "google":
         if not settings.google_api_key:
-            console.print("[red]GOOGLE_API_KEY env var is required for google/ provider[/red]")
+            console.print("[red]DOC_CONVERT_GOOGLE_API_KEY env var is required for google/ provider[/red]")
             raise typer.Exit(1)
         return settings.google_api_key
     if provider == "openrouter":
         if not settings.openrouter_api_key:
-            console.print("[red]OPENROUTER_API_KEY env var is required for openrouter/ provider[/red]")
+            console.print("[red]DOC_CONVERT_OPENROUTER_API_KEY env var is required for openrouter/ provider[/red]")
             raise typer.Exit(1)
         return settings.openrouter_api_key
     if provider == "ibm":
         if not settings.ibm_ica_model_key:
-            console.print("[red]IBM_ICA_MODEL_KEY env var is required for ibm/ provider[/red]")
+            console.print("[red]DOC_CONVERT_IBM_ICA_MODEL_KEY env var is required for ibm/ provider[/red]")
             raise typer.Exit(1)
         return settings.ibm_ica_model_key
     console.print(f"[red]Unknown provider: {provider}[/red]")

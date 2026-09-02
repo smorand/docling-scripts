@@ -62,8 +62,8 @@ PRESET_REPO_IDS: dict[str, str] = {
 # Tried in order; first one with credentials in env is used. Falls back to
 # the local smolvlm preset if none has credentials. IBM ICA is the single
 # credential we consolidate on (it also fronts Google's Gemini models), so the
-# auto-path stays on ibm/ and never requires a separate GOOGLE_API_KEY.
-AUTO_CAPTIONS_PREFERENCES: tuple[str, ...] = ("ibm/claude-sonnet-4-5",)
+# auto-path stays on ibm/ and never requires a separate DOC_CONVERT_GOOGLE_API_KEY.
+AUTO_CAPTIONS_PREFERENCES: tuple[str, ...] = ("ibm/gemini-3.7-flash",)
 
 
 @dataclass(frozen=True)
@@ -97,9 +97,9 @@ DEFAULT_OCR_ENGINE = "tesseract"
 # Default OCR model when --ocr-model is omitted: a cloud LLM reads scanned/image
 # regions. OCR only fires on bitmap content, so born-digital PDFs cost nothing.
 # Uses IBM ICA (which fronts Gemini) so the default needs no separate
-# GOOGLE_API_KEY. Small per-region crops go inline, so the lack of a Files API
+# DOC_CONVERT_GOOGLE_API_KEY. Small per-region crops go inline, so the lack of a Files API
 # on ibm/ is irrelevant here. Use --ocr-model local for the offline Tesseract CLI.
-DEFAULT_OCR_MODEL = "ibm/gemini-3.1-pro-preview"
+DEFAULT_OCR_MODEL = "ibm/gemini-3.7-flash"
 
 
 @dataclass(frozen=True)
@@ -193,7 +193,7 @@ def resolve_captions(value: str | None, llm: str | None, settings: Settings) -> 
         1. Explicit --captions value (any form).
         2. --llm <provider/model> → captions go to that same model.
         3. First cloud preference in AUTO_CAPTIONS_PREFERENCES with creds in env.
-           Today that means ibm/claude-sonnet-4-5 if IBM ICA is configured.
+           Today that means ibm/gemini-3.7-flash if IBM ICA is configured.
         4. Local default preset (smolvlm) when no cloud creds are present.
     """
     from doc_convert.providers import parse_external_llm  # noqa: PLC0415

@@ -434,7 +434,7 @@ companion:
 
     '
 notes:
-  model: ibm/gemini-3.5-flash
+  model: ibm/gemini-3.7-flash
   system_prompt: "You are a note organizer. Given a document analysis and the list\
     \ of available folders, generate structured metadata for storage in a personal\
     \ knowledge system.\n\n## Available folders\n{folders}\n\n{routing_rules}\n\n\

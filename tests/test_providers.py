@@ -151,7 +151,7 @@ def test_resolve_pptx_slide_llm_falls_back_to_llm() -> None:
 
 def test_resolve_pptx_slide_llm_default() -> None:
     assert resolve_pptx_slide_llm(None, None) == DEFAULT_PPTX_SLIDE_VLM
-    assert DEFAULT_PPTX_SLIDE_VLM == "ibm/claude-sonnet-4-6"
+    assert DEFAULT_PPTX_SLIDE_VLM == "ibm/gemini-3.7-flash"
 
 
 def test_resolve_image_llm_uses_explicit_value() -> None:
@@ -160,4 +160,4 @@ def test_resolve_image_llm_uses_explicit_value() -> None:
 
 def test_resolve_image_llm_default() -> None:
     assert resolve_image_llm(None) == DEFAULT_IMAGE_LLM
-    assert DEFAULT_IMAGE_LLM == "ibm/claude-sonnet-4-5"
+    assert DEFAULT_IMAGE_LLM == "ibm/gemini-3.7-flash"

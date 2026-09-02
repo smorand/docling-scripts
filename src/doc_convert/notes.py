@@ -33,8 +33,8 @@ from tracing import trace_span
 logger = logging.getLogger(__name__)
 
 # IBM ICA (which fronts Gemini) so note extraction needs no separate
-# GOOGLE_API_KEY; gemini-3.5-flash is the current flash tier on ICA.
-NOTE_MODEL = "ibm/gemini-3.5-flash"
+# DOC_CONVERT_GOOGLE_API_KEY; gemini-3.7-flash is the current flash tier on ICA.
+NOTE_MODEL = "ibm/gemini-3.7-flash"
 
 NOTE_SYSTEM_PROMPT = """\
 You are a note organizer. Given a document analysis and the list of available \
@@ -91,12 +91,14 @@ MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024  # 10 MB
 def _get_notes_token(settings: Settings) -> str:
     """Get Google OAuth2 access token for Notes API.
 
-    Uses OAuth2 authorization code flow with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
+    Uses OAuth2 authorization code flow with DOC_CONVERT_GOOGLE_CLIENT_ID and DOC_CONVERT_GOOGLE_CLIENT_SECRET.
     Tokens are cached in ~/.cache/doc-convert/notes_token.json and refreshed automatically.
     On first use, opens a browser for Google login with callback on localhost:3000/oauth2callback.
     """
     if not settings.google_client_id or not settings.google_client_secret:
-        console.print("[red]GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars are required for --note[/red]")
+        console.print(
+            "[red]DOC_CONVERT_GOOGLE_CLIENT_ID and DOC_CONVERT_GOOGLE_CLIENT_SECRET env vars are required for --note[/red]"
+        )
         raise SystemExit(1)
 
     # Try cached token first

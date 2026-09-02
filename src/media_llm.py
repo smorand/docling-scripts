@@ -121,7 +121,7 @@ def _too_large_message(provider_label: str, file_name: str, size_mb: float) -> s
         "Inline media providers have payload size limits.\n\n"
         "Use the google/ provider instead (uploads via Files API, no size limit):\n"
         f"  doc-convert {file_name} --llm google/gemini-3.1-pro-preview\n"
-        "  (requires GOOGLE_API_KEY env var)"
+        "  (requires DOC_CONVERT_GOOGLE_API_KEY env var)"
     )
 
 
@@ -133,7 +133,7 @@ def _gateway_timeout_message(provider_label: str, file_name: str) -> str:
         "avoid this, so a persistent timeout means unusually dense media.\n\n"
         "Use the google/ provider instead (Files API, no gateway timeout):\n"
         f"  doc-convert {file_name} --llm google/gemini-3.1-pro-preview\n"
-        "  (requires GOOGLE_API_KEY env var)"
+        "  (requires DOC_CONVERT_GOOGLE_API_KEY env var)"
     )
 
 
@@ -144,7 +144,7 @@ def _transient_gateway_message(provider_label: str, file_name: str) -> str:
         "payload problem. Re-run to retry, or use the google/ provider (different "
         "transport):\n"
         f"  doc-convert {file_name} --llm google/gemini-3.1-pro-preview\n"
-        "  (requires GOOGLE_API_KEY env var)"
+        "  (requires DOC_CONVERT_GOOGLE_API_KEY env var)"
     )
 
 
