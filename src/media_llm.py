@@ -40,7 +40,10 @@ _GATEWAY_TIMEOUT_CODES = frozenset({408, 504, 522, 524})
 # large" (part 1 of a recording succeeds, part 2 of the same size 502s, then
 # retries fine). We retry these with exponential backoff before failing.
 _RETRYABLE_STATUS = RETRYABLE_HTTP_STATUS
-_MAX_MEDIA_ATTEMPTS = 4
+_MAX_MEDIA_ATTEMPTS = 20
+_NULL_CONTENT_MAX_ATTEMPTS = 20
+_NULL_CONTENT_BACKOFF_BASE = 5.0
+_NULL_CONTENT_BACKOFF_MAX = 300.0
 _RETRY_BACKOFF_SECONDS = RETRY_BACKOFF_SECONDS
 # A raw payload above this genuinely exceeds the inline base64 ceiling (~75 MB
 # base64 ≈ ~56 MB raw, measured against IBM ICA). A 502/413 here really IS "too
@@ -563,7 +566,7 @@ def process_media_openrouter(
     with trace_span(f"{provider_label}.generate", model=model, media_type="audio" if is_audio else "video"):
         logger.info("Sending %s to %s (%s, %s)", file_path.name, provider_label, model, mime_type)
         with httpx.Client(timeout=600.0) as client:
-            for attempt in range(1, _MAX_MEDIA_ATTEMPTS + 1):
+            for attempt in range(1, _NULL_CONTENT_MAX_ATTEMPTS + 1):
                 resp = _send_media_request(
                     client,
                     url,
@@ -576,20 +579,20 @@ def process_media_openrouter(
                 content: str | None = resp.json()["choices"][0]["message"]["content"]
                 if content is not None:
                     return content
-                if attempt < _MAX_MEDIA_ATTEMPTS:
-                    wait = _RETRY_BACKOFF_SECONDS[min(attempt - 1, len(_RETRY_BACKOFF_SECONDS) - 1)]
+                if attempt < _NULL_CONTENT_MAX_ATTEMPTS:
+                    wait = min(_NULL_CONTENT_BACKOFF_BASE * (2 ** (attempt - 1)), _NULL_CONTENT_BACKOFF_MAX)
                     logger.warning(
                         "%s returned null content for %s (attempt %d/%d); retrying in %.0fs",
                         provider_label,
                         file_path.name,
                         attempt,
-                        _MAX_MEDIA_ATTEMPTS,
+                        _NULL_CONTENT_MAX_ATTEMPTS,
                         wait,
                     )
                     time.sleep(wait)
 
     raise RuntimeError(
-        f"{provider_label} returned null content for {file_path.name} after {_MAX_MEDIA_ATTEMPTS} attempts. "
+        f"{provider_label} returned null content for {file_path.name} after {_NULL_CONTENT_MAX_ATTEMPTS} attempts. "
         "The model may have refused or hit a silent rate-limit. Try again or switch to --media-llm google/<model>."
     )
 
