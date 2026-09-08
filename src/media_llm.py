@@ -573,7 +573,13 @@ def process_media_openrouter(
                 raw_size_mb=raw_size_mb,
             )
 
-    return cast("str", resp.json()["choices"][0]["message"]["content"])
+    content: str | None = resp.json()["choices"][0]["message"]["content"]
+    if content is None:
+        raise RuntimeError(
+            f"{provider_label} returned a message with null content for {file_path.name}. "
+            "The model may have refused or been rate-limited silently. Try again or switch provider."
+        )
+    return content
 
 
 # ── Unified entry point ──────────────────────────────────────────────────────

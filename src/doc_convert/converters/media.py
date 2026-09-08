@@ -118,7 +118,13 @@ class MediaConverter(BaseConverter):
 
         if len(parts) == 1:
             with trace_span("audio.transcribe", file=self.source.name, provider=provider):
-                return process_media(parts[0].path, provider, model, prompt, api_key, system_prompt=system, url=url)
+                text = process_media(parts[0].path, provider, model, prompt, api_key, system_prompt=system, url=url)
+            if text is None:
+                raise RuntimeError(
+                    f"Transcription returned no content for {self.source.name}; the API returned an empty response "
+                    "after all retries. Try again or switch to --media-llm google/<model>."
+                )
+            return text
         return self._transcribe_audio_parts(parts, provider, model, api_key, url, prompt, system)
 
     def _transcribe_audio_parts(
@@ -156,6 +162,12 @@ class MediaConverter(BaseConverter):
             with trace_span("audio.transcribe.part", file=part.path.name, provider=provider, part=part.index + 1):
                 logger.info("Transcribing part %d/%d (%s)", part.index + 1, len(parts), part.path.name)
                 text = process_media(part.path, provider, model, prompt, api_key, system_prompt=system, url=url)
+            if text is None:
+                raise RuntimeError(
+                    f"Transcription returned no content for part {part.index + 1}/{len(parts)} "
+                    f"({part.path.name}); the API returned an empty response after all retries. "
+                    "Try again or switch to --media-llm google/<model>."
+                )
             return part, text.strip()
 
         if workers <= 1:
