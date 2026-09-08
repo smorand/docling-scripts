@@ -563,23 +563,35 @@ def process_media_openrouter(
     with trace_span(f"{provider_label}.generate", model=model, media_type="audio" if is_audio else "video"):
         logger.info("Sending %s to %s (%s, %s)", file_path.name, provider_label, model, mime_type)
         with httpx.Client(timeout=600.0) as client:
-            resp = _send_media_request(
-                client,
-                url,
-                headers,
-                body,
-                provider_label=provider_label,
-                file_name=file_path.name,
-                raw_size_mb=raw_size_mb,
-            )
+            for attempt in range(1, _MAX_MEDIA_ATTEMPTS + 1):
+                resp = _send_media_request(
+                    client,
+                    url,
+                    headers,
+                    body,
+                    provider_label=provider_label,
+                    file_name=file_path.name,
+                    raw_size_mb=raw_size_mb,
+                )
+                content: str | None = resp.json()["choices"][0]["message"]["content"]
+                if content is not None:
+                    return content
+                if attempt < _MAX_MEDIA_ATTEMPTS:
+                    wait = _RETRY_BACKOFF_SECONDS[min(attempt - 1, len(_RETRY_BACKOFF_SECONDS) - 1)]
+                    logger.warning(
+                        "%s returned null content for %s (attempt %d/%d); retrying in %.0fs",
+                        provider_label,
+                        file_path.name,
+                        attempt,
+                        _MAX_MEDIA_ATTEMPTS,
+                        wait,
+                    )
+                    time.sleep(wait)
 
-    content: str | None = resp.json()["choices"][0]["message"]["content"]
-    if content is None:
-        raise RuntimeError(
-            f"{provider_label} returned a message with null content for {file_path.name}. "
-            "The model may have refused or been rate-limited silently. Try again or switch provider."
-        )
-    return content
+    raise RuntimeError(
+        f"{provider_label} returned null content for {file_path.name} after {_MAX_MEDIA_ATTEMPTS} attempts. "
+        "The model may have refused or hit a silent rate-limit. Try again or switch to --media-llm google/<model>."
+    )
 
 
 # ── Unified entry point ──────────────────────────────────────────────────────
