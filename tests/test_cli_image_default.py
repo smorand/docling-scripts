@@ -43,7 +43,7 @@ def test_image_input_defaults_llm_to_ibm_sonnet(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     options = captured["options"]
-    assert options.llm == "devpass/gemini-3.7-flash"
+    assert options.llm == "ibm/gemini-3.7-flash"
     assert options.engine == Engine.LOCAL
 
 

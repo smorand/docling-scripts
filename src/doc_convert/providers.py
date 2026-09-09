@@ -221,26 +221,26 @@ RETRY_BACKOFF_SECONDS: tuple[float, ...] = (5.0, 15.0, 45.0)
 # on large video.
 DEFAULT_MEDIA_LLM = "google/gemini-3.7-flash"
 
-# Audio defaults to devpass/ (LLM gateway fronting Gemini): audio is normalised
-# to mono 16 kHz ogg and split when needed (see audio_prep) so it always fits
-# the inline payload limit, letting transcription run on the single devpass
-# credential without DOC_CONVERT_GOOGLE_API_KEY.
-DEFAULT_AUDIO_LLM = "devpass/gemini-3.7-flash"
+# Audio defaults to ibm/ (IBM ICA fronts Gemini): audio is normalised to mono
+# 16 kHz ogg and split when needed (see audio_prep) so it always fits the inline
+# payload limit, letting transcription run on the single IBM credential without
+# DOC_CONVERT_GOOGLE_API_KEY.
+DEFAULT_AUDIO_LLM = "ibm/gemini-3.7-flash"
 
 # Default model for the `--analyze` text-only analysis pass on documents.
 # Picked for reasoning quality on long markdown context. Document analysis only
 # sends text, so any provider works (no Files API constraint).
-DEFAULT_DOCUMENT_ANALYSIS_LLM = "devpass/gemini-3.7-flash"
+DEFAULT_DOCUMENT_ANALYSIS_LLM = "ibm/gemini-3.7-flash"
 
 # Default model for companion context analysis. Must be multimodal (companion
 # notes often reference screenshots/whiteboard captures sent inline). Gemini
-# 3.7 Flash via devpass is used because it supports vision and is already the
+# 3.7 Flash via IBM ICA is used because it supports vision and is already the
 # default for audio transcription.
-DEFAULT_COMPANION_LLM = "devpass/gemini-3.7-flash"
+DEFAULT_COMPANION_LLM = "ibm/gemini-3.7-flash"
 
 # Default model for the PPTX whole-slide screenshot visual interpretation pass
 # (see pptx_slide_vlm.py).
-DEFAULT_PPTX_SLIDE_VLM = "devpass/gemini-3.7-flash"
+DEFAULT_PPTX_SLIDE_VLM = "ibm/gemini-3.7-flash"
 
 # How many per-image vision calls run at once, for both figure captions and PPTX
 # slide screenshots. Each is an independent ~8-20 s HTTPS round trip, so a deck
@@ -264,8 +264,8 @@ DEFAULT_LLM_CONCURRENCY = 8
 
 # Default model for image conversion when the input itself is an image and the
 # user did not pass --llm. Images always go through the external VLM pipeline,
-# so we auto-fill a fast devpass-hosted multimodal model instead of hard-failing.
-DEFAULT_IMAGE_LLM = "devpass/gemini-3.7-flash"
+# so we auto-fill a fast IBM-hosted multimodal model instead of hard-failing.
+DEFAULT_IMAGE_LLM = "ibm/gemini-3.7-flash"
 
 
 def get_provider_url(provider: str, settings: Settings) -> str:
@@ -338,7 +338,7 @@ def resolve_media_llm(llm: str | None, settings: Settings, *, media_type: str = 
     """Resolve provider, model, and API key for audio/video processing.
 
     When ``llm`` is not given, the default depends on ``media_type``: audio uses
-    ``DEFAULT_AUDIO_LLM`` (devpass/, since audio is prepped to fit the inline limit),
+    ``DEFAULT_AUDIO_LLM`` (ibm/, since audio is prepped to fit the inline limit),
     video uses ``DEFAULT_MEDIA_LLM`` (google/, for the size-unlimited Files API).
     """
     default = DEFAULT_AUDIO_LLM if media_type == "audio" else DEFAULT_MEDIA_LLM

@@ -94,9 +94,9 @@ def test_resolve_media_llm_override(ibm_settings: Settings) -> None:
     assert (provider, model, key) == ("ibm", "claude-opus-4-8", "ibm-key")
 
 
-def test_resolve_media_llm_audio_default_is_devpass(devpass_settings: Settings) -> None:
-    provider, model, key = resolve_media_llm(None, devpass_settings, media_type="audio")
-    assert (provider, key) == ("devpass", "devpass-key")
+def test_resolve_media_llm_audio_default_is_ibm(ibm_settings: Settings) -> None:
+    provider, model, key = resolve_media_llm(None, ibm_settings, media_type="audio")
+    assert (provider, key) == ("ibm", "ibm-key")
     assert model == DEFAULT_AUDIO_LLM.split("/", 1)[1]
 
 
@@ -105,11 +105,11 @@ def test_resolve_media_llm_video_default_is_google(google_settings: Settings) ->
     assert provider == "google"
 
 
-def test_resolve_document_analysis_llm_default(devpass_settings: Settings) -> None:
-    provider, model, key = resolve_document_analysis_llm(None, devpass_settings)
+def test_resolve_document_analysis_llm_default(ibm_settings: Settings) -> None:
+    provider, model, key = resolve_document_analysis_llm(None, ibm_settings)
     assert provider == DEFAULT_DOCUMENT_ANALYSIS_LLM.split("/", 1)[0]
     assert model == DEFAULT_DOCUMENT_ANALYSIS_LLM.split("/", 1)[1]
-    assert key == "devpass-key"
+    assert key == "ibm-key"
 
 
 def test_build_context_block_empty() -> None:
@@ -151,7 +151,7 @@ def test_resolve_pptx_slide_llm_falls_back_to_llm() -> None:
 
 def test_resolve_pptx_slide_llm_default() -> None:
     assert resolve_pptx_slide_llm(None, None) == DEFAULT_PPTX_SLIDE_VLM
-    assert DEFAULT_PPTX_SLIDE_VLM == "devpass/gemini-3.7-flash"
+    assert DEFAULT_PPTX_SLIDE_VLM == "ibm/gemini-3.7-flash"
 
 
 def test_resolve_image_llm_uses_explicit_value() -> None:
@@ -160,4 +160,4 @@ def test_resolve_image_llm_uses_explicit_value() -> None:
 
 def test_resolve_image_llm_default() -> None:
     assert resolve_image_llm(None) == DEFAULT_IMAGE_LLM
-    assert DEFAULT_IMAGE_LLM == "devpass/gemini-3.7-flash"
+    assert DEFAULT_IMAGE_LLM == "ibm/gemini-3.7-flash"
