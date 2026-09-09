@@ -641,5 +641,19 @@ def process_media(
             provider_label="ibm",
             attachments=attachments,
         )
+    if provider == "devpass":
+        if not url:
+            msg = "devpass provider requires `url` (resolve via providers.get_provider_url)"
+            raise ValueError(msg)
+        return process_media_openrouter(
+            file_path,
+            model,
+            prompt,
+            api_key,
+            system_prompt=system_prompt,
+            url=url,
+            provider_label="devpass",
+            attachments=attachments,
+        )
     msg = f"Unsupported provider for media: {provider}"
     raise ValueError(msg)

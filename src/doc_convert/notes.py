@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # IBM ICA (which fronts Gemini) so note extraction needs no separate
 # DOC_CONVERT_GOOGLE_API_KEY; gemini-3.7-flash is the current flash tier on ICA.
-NOTE_MODEL = "ibm/gemini-3.7-flash"
+NOTE_MODEL = "devpass/gemini-3.7-flash"
 
 NOTE_SYSTEM_PROMPT = """\
 You are a note organizer. Given a document analysis and the list of available \

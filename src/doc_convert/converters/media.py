@@ -95,7 +95,7 @@ class MediaConverter(BaseConverter):
         """Transcribe audio, normalising to mono 16 kHz ogg and splitting if oversized.
 
         google/ has no payload limit (Files API), so it never splits; inline
-        providers (ibm/, openrouter/) split past ``SIZE_LIMIT_MB``.
+        providers (devpass/, ibm/, openrouter/) split past ``SIZE_LIMIT_MB``.
         """
         from audio import build_transcription_prompt  # noqa: PLC0415
         from audio_prep import (  # noqa: PLC0415

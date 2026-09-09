@@ -36,9 +36,9 @@ def _make_pptx(tmp_path: Path, *, notes: dict[int, str]) -> Path:
     return path
 
 
-def test_default_model_is_confirmed_ibm_sonnet() -> None:
-    # Confirmed present via IBM ICA's GET /models (see providers.DEFAULT_PPTX_SLIDE_VLM).
-    assert DEFAULT_PPTX_SLIDE_VLM == "ibm/gemini-3.7-flash"
+def test_default_model_is_confirmed_devpass_gemini() -> None:
+    # Confirmed present via devpass /v1/models (see providers.DEFAULT_PPTX_SLIDE_VLM).
+    assert DEFAULT_PPTX_SLIDE_VLM == "devpass/gemini-3.7-flash"
 
 
 def test_extract_slide_notes_returns_only_nonempty(tmp_path: Path) -> None:
@@ -148,7 +148,7 @@ def _slide_files(tmp_path: Path, count: int) -> dict[int, str]:
     return mapping
 
 
-def test_analyze_slide_images_runs_concurrently_and_keys_by_slide(tmp_path: Path, ibm_settings: Settings) -> None:
+def test_analyze_slide_images_runs_concurrently_and_keys_by_slide(tmp_path: Path, devpass_settings: Settings) -> None:
     """All slides are analysed and mapped to the right number, whatever the
     completion order (which is nondeterministic under concurrency)."""
     mapping = _slide_files(tmp_path, 9)
@@ -169,7 +169,7 @@ def test_analyze_slide_images_runs_concurrently_and_keys_by_slide(tmp_path: Path
         return f"analysis of {image_path.name}"
 
     with patch("doc_convert.vision_llm.describe_image", side_effect=fake_describe):
-        analyses = analyze_slide_images(mapping, tmp_path, ibm_settings, concurrency=4)
+        analyses = analyze_slide_images(mapping, tmp_path, devpass_settings, concurrency=4)
 
     assert sorted(analyses) == list(range(1, 10))
     assert sorted(seen) == list(range(1, 10))
@@ -182,7 +182,7 @@ def test_analyze_slide_images_runs_concurrently_and_keys_by_slide(tmp_path: Path
         assert analysis.image_path == mapping[number]
 
 
-def test_analyze_slide_images_concurrency_one_is_sequential(tmp_path: Path, ibm_settings: Settings) -> None:
+def test_analyze_slide_images_concurrency_one_is_sequential(tmp_path: Path, devpass_settings: Settings) -> None:
     """concurrency=1 must never overlap requests (escape hatch for rate limits)."""
     mapping = _slide_files(tmp_path, 5)
     max_in_flight = 0
@@ -200,13 +200,13 @@ def test_analyze_slide_images_concurrency_one_is_sequential(tmp_path: Path, ibm_
         return "ok"
 
     with patch("doc_convert.vision_llm.describe_image", side_effect=fake_describe):
-        analyses = analyze_slide_images(mapping, tmp_path, ibm_settings, concurrency=1)
+        analyses = analyze_slide_images(mapping, tmp_path, devpass_settings, concurrency=1)
 
     assert max_in_flight == 1
     assert len(analyses) == 5
 
 
-def test_analyze_slide_images_result_is_ordered_by_slide_number(tmp_path: Path, ibm_settings: Settings) -> None:
+def test_analyze_slide_images_result_is_ordered_by_slide_number(tmp_path: Path, devpass_settings: Settings) -> None:
     """Completion order is arbitrary; the returned mapping must still iterate in
     slide order so logs and debugging stay readable."""
     mapping = _slide_files(tmp_path, 6)
@@ -217,12 +217,12 @@ def test_analyze_slide_images_result_is_ordered_by_slide_number(tmp_path: Path, 
         return "ok"
 
     with patch("doc_convert.vision_llm.describe_image", side_effect=fake_describe):
-        analyses = analyze_slide_images(mapping, tmp_path, ibm_settings, concurrency=4)
+        analyses = analyze_slide_images(mapping, tmp_path, devpass_settings, concurrency=4)
 
     assert list(analyses) == sorted(analyses)
 
 
-def test_analyze_slide_images_one_failure_does_not_lose_the_others(tmp_path: Path, ibm_settings: Settings) -> None:
+def test_analyze_slide_images_one_failure_does_not_lose_the_others(tmp_path: Path, devpass_settings: Settings) -> None:
     """A slide that exhausts its retries is simply absent; the deck still converts."""
     mapping = _slide_files(tmp_path, 4)
 
@@ -232,12 +232,12 @@ def test_analyze_slide_images_one_failure_does_not_lose_the_others(tmp_path: Pat
         return "ok"
 
     with patch("doc_convert.vision_llm.describe_image", side_effect=fake_describe):
-        analyses = analyze_slide_images(mapping, tmp_path, ibm_settings, concurrency=4)
+        analyses = analyze_slide_images(mapping, tmp_path, devpass_settings, concurrency=4)
 
     assert sorted(analyses) == [1, 3, 4]
 
 
-def test_analyze_slide_images_skips_missing_screenshots(tmp_path: Path, ibm_settings: Settings) -> None:
+def test_analyze_slide_images_skips_missing_screenshots(tmp_path: Path, devpass_settings: Settings) -> None:
     mapping = _slide_files(tmp_path, 2)
     mapping[3] = "slides/slide_003.png"  # never written to disk
 
@@ -246,16 +246,16 @@ def test_analyze_slide_images_skips_missing_screenshots(tmp_path: Path, ibm_sett
         return "ok"
 
     with patch("doc_convert.vision_llm.describe_image", side_effect=fake_describe):
-        analyses = analyze_slide_images(mapping, tmp_path, ibm_settings, concurrency=4)
+        analyses = analyze_slide_images(mapping, tmp_path, devpass_settings, concurrency=4)
 
     assert sorted(analyses) == [1, 2]
 
 
-def test_analyze_slide_images_no_slides_returns_empty(tmp_path: Path, ibm_settings: Settings) -> None:
-    assert analyze_slide_images({}, tmp_path, ibm_settings) == {}
+def test_analyze_slide_images_no_slides_returns_empty(tmp_path: Path, devpass_settings: Settings) -> None:
+    assert analyze_slide_images({}, tmp_path, devpass_settings) == {}
 
 
-def test_analyze_slide_images_fatal_model_error_aborts(tmp_path: Path, ibm_settings: Settings) -> None:
+def test_analyze_slide_images_fatal_model_error_aborts(tmp_path: Path, devpass_settings: Settings) -> None:
     """An unknown model slug must abort the whole deck rather than silently
     producing 52 empty analyses."""
     mapping = _slide_files(tmp_path, 8)
@@ -267,4 +267,4 @@ def test_analyze_slide_images_fatal_model_error_aborts(tmp_path: Path, ibm_setti
         patch("doc_convert.vision_llm.describe_image", side_effect=fake_describe),
         pytest.raises(typer.Exit),
     ):
-        analyze_slide_images(mapping, tmp_path, ibm_settings, concurrency=4)
+        analyze_slide_images(mapping, tmp_path, devpass_settings, concurrency=4)
