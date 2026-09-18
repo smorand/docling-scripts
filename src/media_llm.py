@@ -28,7 +28,15 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 # chunk can take several minutes to transcribe (google/ has no gateway cap).
 _GEMINI_GENERATE_TIMEOUT = 30 * 60.0
 # Gemini can return an empty MALFORMED_RESPONSE candidate; retry a few times.
+# blockReason=OTHER is also transient (undocumented backend signal, not a policy block).
 _GEMINI_MAX_ATTEMPTS = 3
+
+# blockReason values that indicate a definitive policy refusal — do NOT retry these.
+_GEMINI_HARD_BLOCK_REASONS = frozenset({"SAFETY", "RECITATION", "PROHIBITED_CONTENT", "LANGUAGE"})
+
+# When OTHER persists across all retries on the requested model, automatically retry on this fallback.
+# gemini-2.5-flash has less aggressive content filters on professional meeting recordings.
+_GEMINI_OTHER_FALLBACK_MODEL = "gemini-2.5-flash-preview-05-20"
 
 # Gateway/proxy timeout statuses seen from inline providers when a single media
 # request runs past their ~10-minute request ceiling (Cloudflare 524, plus the
@@ -366,6 +374,7 @@ def _gemini_generate(
     *,
     system_prompt: str | None = None,
     extra_files: list[tuple[str, str]] | None = None,
+    _fallback_attempted: bool = False,
 ) -> str:
     """Generate content using an uploaded Gemini file.
 
@@ -402,8 +411,45 @@ def _gemini_generate(
         candidates = data.get("candidates", [])
         if not candidates:
             reason = data.get("promptFeedback", {}).get("blockReason", "unknown")
-            logger.error("Gemini returned no candidates. Block reason: %s. Response: %s", reason, str(data)[:500])
-            msg = f"Gemini returned no candidates (block reason: {reason})"
+            if reason in _GEMINI_HARD_BLOCK_REASONS:
+                logger.error(
+                    "Gemini hard block (reason: %s, attempt %d/%d). Response: %s",
+                    reason,
+                    attempt,
+                    _GEMINI_MAX_ATTEMPTS,
+                    str(data)[:500],
+                )
+                raise RuntimeError(f"Gemini returned no candidates (block reason: {reason})")
+            # OTHER / unknown = transient backend signal; retry with backoff.
+            logger.warning(
+                "Gemini returned no candidates (transient block reason: %s, attempt %d/%d); retrying",
+                reason,
+                attempt,
+                _GEMINI_MAX_ATTEMPTS,
+            )
+            if attempt < _GEMINI_MAX_ATTEMPTS:
+                time.sleep(_RETRY_BACKOFF_SECONDS[min(attempt - 1, len(_RETRY_BACKOFF_SECONDS) - 1)])
+                continue
+            # All retries exhausted on transient OTHER block.
+            # If this is the original model, try once more on the fallback before giving up.
+            if not _fallback_attempted and model != _GEMINI_OTHER_FALLBACK_MODEL:
+                logger.warning(
+                    "Gemini %s blocked with OTHER after %d attempts; retrying on fallback model %s",
+                    model,
+                    _GEMINI_MAX_ATTEMPTS,
+                    _GEMINI_OTHER_FALLBACK_MODEL,
+                )
+                return _gemini_generate(
+                    file_uri,
+                    mime_type,
+                    _GEMINI_OTHER_FALLBACK_MODEL,
+                    prompt,
+                    api_key,
+                    system_prompt=system_prompt,
+                    extra_files=extra_files,
+                    _fallback_attempted=True,
+                )
+            msg = f"Gemini returned no candidates after {_GEMINI_MAX_ATTEMPTS} attempts (block reason: {reason})"
             raise RuntimeError(msg)
 
         parts_out = candidates[0].get("content", {}).get("parts", [])

@@ -175,3 +175,204 @@ def test_success_first_try_makes_one_call() -> None:
     resp = _send(client)
     assert resp.status_code == 200
     assert client.calls == 1
+
+
+# ---------------------------------------------------------------------------
+# _gemini_generate: blockReason retry logic
+# ---------------------------------------------------------------------------
+
+_GEMINI_GENERATE_URL = "https://generativelanguage.googleapis.com/v1beta/models/test-model:generateContent"
+_GOOD_CANDIDATE = {"candidates": [{"content": {"parts": [{"text": "hello world"}]}, "finishReason": "STOP"}]}
+_EMPTY_OTHER = {"promptFeedback": {"blockReason": "OTHER"}, "candidates": []}
+_EMPTY_SAFETY = {"promptFeedback": {"blockReason": "SAFETY"}, "candidates": []}
+_EMPTY_RECITATION = {"promptFeedback": {"blockReason": "RECITATION"}, "candidates": []}
+_EMPTY_NO_FEEDBACK = {"candidates": []}  # missing promptFeedback entirely
+
+
+class _FakeHttpxClient:
+    """Minimal httpx.Client stand-in for _gemini_generate tests."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        self._responses = list(responses)
+        self.calls = 0
+
+    def __enter__(self) -> _FakeHttpxClient:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        pass
+
+    def post(self, _url: str, **_kwargs: object) -> _FakeHttpxResp:
+        self.calls += 1
+        resp = self._responses.pop(0) if self._responses else _FakeHttpxResp(200, _GOOD_CANDIDATE)
+        if isinstance(resp, Exception):
+            raise resp
+        return resp
+
+
+class _FakeHttpxResp:
+    def __init__(self, status: int, body: dict[str, Any]) -> None:
+        self.status_code = status
+        self._body = body
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}",
+                request=None,
+                response=None,  # type: ignore[arg-type]
+            )
+
+    def json(self) -> dict[str, Any]:
+        return self._body
+
+
+def _patch_gemini_client(monkeypatch: pytest.MonkeyPatch, client: _FakeHttpxClient) -> None:
+    """Replace httpx.Client used inside _gemini_generate."""
+
+    class _Ctx:
+        def __init__(self, **_kw: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakeHttpxClient:
+            return client
+
+        def __exit__(self, *_: object) -> None:
+            pass
+
+    monkeypatch.setattr(media_llm.httpx, "Client", _Ctx)
+
+
+def test_gemini_generate_retries_block_reason_other_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """blockReason=OTHER is transient; the second attempt must succeed."""
+
+    client = _FakeHttpxClient(
+        [
+            _FakeHttpxResp(200, _EMPTY_OTHER),
+            _FakeHttpxResp(200, _GOOD_CANDIDATE),
+        ]
+    )
+    _patch_gemini_client(monkeypatch, client)
+    monkeypatch.setattr(media_llm.time, "sleep", lambda _: None)
+
+    result = media_llm._gemini_generate(  # type: ignore[attr-defined]
+        file_uri="files/abc",
+        mime_type="audio/ogg",
+        model="test-model",
+        prompt="transcribe",
+        api_key="key",
+        extra_files=None,
+        system_prompt=None,
+    )
+    assert result == "hello world"
+    assert client.calls == 2
+
+
+def test_gemini_generate_retries_missing_feedback_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Empty candidates with no promptFeedback key (reason=unknown) must also be retried."""
+
+    client = _FakeHttpxClient(
+        [
+            _FakeHttpxResp(200, _EMPTY_NO_FEEDBACK),
+            _FakeHttpxResp(200, _GOOD_CANDIDATE),
+        ]
+    )
+    _patch_gemini_client(monkeypatch, client)
+    monkeypatch.setattr(media_llm.time, "sleep", lambda _: None)
+
+    result = media_llm._gemini_generate(  # type: ignore[attr-defined]
+        file_uri="files/abc",
+        mime_type="audio/ogg",
+        model="test-model",
+        prompt="transcribe",
+        api_key="key",
+        extra_files=None,
+        system_prompt=None,
+    )
+    assert result == "hello world"
+    assert client.calls == 2
+
+
+def test_gemini_generate_raises_immediately_on_safety_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """blockReason=SAFETY is a policy refusal; must raise on first attempt without retry."""
+
+    client = _FakeHttpxClient([_FakeHttpxResp(200, _EMPTY_SAFETY)])
+    _patch_gemini_client(monkeypatch, client)
+    monkeypatch.setattr(media_llm.time, "sleep", lambda _: None)
+
+    with pytest.raises(RuntimeError, match="SAFETY"):
+        media_llm._gemini_generate(  # type: ignore[attr-defined]
+            file_uri="files/abc",
+            mime_type="audio/ogg",
+            model="test-model",
+            prompt="transcribe",
+            api_key="key",
+            extra_files=None,
+            system_prompt=None,
+        )
+    assert client.calls == 1  # no retry on hard block
+
+
+def test_gemini_generate_raises_immediately_on_recitation_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """blockReason=RECITATION must raise on first attempt."""
+
+    client = _FakeHttpxClient([_FakeHttpxResp(200, _EMPTY_RECITATION)])
+    _patch_gemini_client(monkeypatch, client)
+    monkeypatch.setattr(media_llm.time, "sleep", lambda _: None)
+
+    with pytest.raises(RuntimeError, match="RECITATION"):
+        media_llm._gemini_generate(  # type: ignore[attr-defined]
+            file_uri="files/abc",
+            mime_type="audio/ogg",
+            model="test-model",
+            prompt="transcribe",
+            api_key="key",
+            extra_files=None,
+            system_prompt=None,
+        )
+    assert client.calls == 1
+
+
+def test_gemini_generate_exhausts_retries_on_persistent_other_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Persistent OTHER block after all attempts raises when fallback is already attempted."""
+
+    max_attempts = media_llm._GEMINI_MAX_ATTEMPTS  # type: ignore[attr-defined]
+    client = _FakeHttpxClient([_FakeHttpxResp(200, _EMPTY_OTHER)] * max_attempts)
+    _patch_gemini_client(monkeypatch, client)
+    monkeypatch.setattr(media_llm.time, "sleep", lambda _: None)
+
+    with pytest.raises(RuntimeError, match=str(max_attempts)):
+        media_llm._gemini_generate(  # type: ignore[attr-defined]
+            file_uri="files/abc",
+            mime_type="audio/ogg",
+            model="test-model",
+            prompt="transcribe",
+            api_key="key",
+            extra_files=None,
+            system_prompt=None,
+            _fallback_attempted=True,  # bypass fallback to test exhaustion path
+        )
+    assert client.calls == max_attempts
+
+
+def test_gemini_generate_falls_back_to_alternative_model_on_persistent_other(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OTHER block exhausting all retries on original model must retry on the fallback model and succeed."""
+    max_attempts = media_llm._GEMINI_MAX_ATTEMPTS  # type: ignore[attr-defined]
+
+    # First max_attempts calls block with OTHER (original model), then one succeeds (fallback model).
+    responses = [_FakeHttpxResp(200, _EMPTY_OTHER)] * max_attempts + [_FakeHttpxResp(200, _GOOD_CANDIDATE)]
+    client = _FakeHttpxClient(responses)
+    _patch_gemini_client(monkeypatch, client)
+    monkeypatch.setattr(media_llm.time, "sleep", lambda _: None)
+
+    result = media_llm._gemini_generate(  # type: ignore[attr-defined]
+        file_uri="files/abc",
+        mime_type="audio/ogg",
+        model="gemini-3.7-flash",  # original model, different from fallback
+        prompt="transcribe",
+        api_key="key",
+        extra_files=None,
+        system_prompt=None,
+    )
+    assert result == "hello world"
+    assert client.calls == max_attempts + 1  # max_attempts blocks + 1 fallback success
