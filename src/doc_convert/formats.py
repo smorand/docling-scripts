@@ -150,7 +150,8 @@ def resolve_ocr_model(value: str | None, *, no_ocr: bool) -> OcrSpec:
     Precedence:
         1. ``--no-ocr`` (legacy flag) forces OCR off.
         2. Explicit ``--ocr-model`` value (off, local engine, or provider/model).
-        3. Default: the cloud LLM in ``DEFAULT_OCR_MODEL`` (Gemini). OCR only
+        3. DOC_CONVERT_DEFAULT_OCR_MODEL env var.
+        4. Default: the cloud LLM in ``DEFAULT_OCR_MODEL`` (Gemini). OCR only
            fires on scanned/image regions, so born-digital PDFs incur no cost
            or credential requirement. Use ``--ocr-model local`` for Tesseract.
 
@@ -158,11 +159,15 @@ def resolve_ocr_model(value: str | None, *, no_ocr: bool) -> OcrSpec:
     model is chosen by this axis alone.
     """
     from doc_convert.providers import parse_external_llm  # noqa: PLC0415
+    from config import get_settings  # noqa: PLC0415
 
     if no_ocr:
         return OcrOff()
     if value is not None:
         return parse_ocr_model(value)
+    settings = get_settings()
+    if settings.default_ocr_model:
+        return parse_ocr_model(settings.default_ocr_model)
     provider, model = parse_external_llm(DEFAULT_OCR_MODEL)
     return OcrLlm(provider, model)
 
@@ -191,15 +196,18 @@ def resolve_captions(value: str | None, llm: str | None, settings: Settings) -> 
 
     Precedence:
         1. Explicit --captions value (any form).
-        2. --llm <provider/model> → captions go to that same model.
-        3. First cloud preference in AUTO_CAPTIONS_PREFERENCES with creds in env.
+        2. DOC_CONVERT_DEFAULT_CAPTIONS env var.
+        3. --llm <provider/model> → captions go to that same model.
+        4. First cloud preference in AUTO_CAPTIONS_PREFERENCES with creds in env.
            Today that means ibm/gemini-3.7-flash if devpass is configured.
-        4. Local default preset (smolvlm) when no cloud creds are present.
+        5. Local default preset (smolvlm) when no cloud creds are present.
     """
     from doc_convert.providers import parse_external_llm  # noqa: PLC0415
 
     if value is not None:
         return parse_captions(value)
+    if settings.default_captions:
+        return parse_captions(settings.default_captions)
     if llm:
         provider, model = parse_external_llm(llm)
         return CaptionsLlm(provider, model)
@@ -217,6 +225,8 @@ def _provider_has_credentials(provider: str, settings: Settings) -> bool:
         return bool(settings.openrouter_api_key)
     if provider == "ibm":
         return bool(settings.ibm_ica_model_key and settings.ibm_ica_base_url)
+    if provider == "ei":
+        return bool(settings.ei_api_key and settings.ei_base_url)
     if provider == "devpass":
         return bool(settings.devpass_api_key)
     return False

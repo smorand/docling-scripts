@@ -203,7 +203,7 @@ PROVIDER_URLS: dict[str, str] = {
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
 }
 
-SUPPORTED_PROVIDERS: tuple[str, ...] = ("google", "openrouter", "ibm", "devpass")
+SUPPORTED_PROVIDERS: tuple[str, ...] = ("google", "openrouter", "ibm", "devpass", "ei")
 
 # Transient upstream failures worth retrying, shared by every caller that talks
 # to a provider (media payloads, PPTX slide screenshots). IBM ICA's gateway
@@ -277,6 +277,12 @@ def get_provider_url(provider: str, settings: Settings) -> str:
             console.print("[red]DOC_CONVERT_IBM_ICA_BASE_URL env var is required for ibm/ provider[/red]")
             raise typer.Exit(1)
         return f"{settings.ibm_ica_base_url.rstrip('/')}/chat/completions"
+    if provider == "ei":
+        if not settings.ei_base_url:
+            console.print("[red]DOC_CONVERT_EI_BASE_URL env var is required for ei/ provider[/red]")
+            raise typer.Exit(1)
+        # EI URL is already complete (includes /chat/completions path)
+        return settings.ei_base_url.rstrip("/")
     if provider == "devpass":
         base = settings.devpass_base_url.rstrip("/")
         # Normalise: ensure the base URL includes the /v1 segment
@@ -325,6 +331,11 @@ def require_api_key(provider: str, settings: Settings) -> str:
             console.print("[red]DOC_CONVERT_IBM_ICA_MODEL_KEY env var is required for ibm/ provider[/red]")
             raise typer.Exit(1)
         return settings.ibm_ica_model_key
+    if provider == "ei":
+        if not settings.ei_api_key:
+            console.print("[red]DOC_CONVERT_EI_API_KEY env var is required for ei/ provider[/red]")
+            raise typer.Exit(1)
+        return settings.ei_api_key
     if provider == "devpass":
         if not settings.devpass_api_key:
             console.print("[red]DEVPASS_API_KEY env var is required for devpass/ provider[/red]")

@@ -19,6 +19,10 @@ class Settings(BaseSettings):
         DOC_CONVERT_OPENROUTER_API_KEY   - OpenRouter API key (for openrouter/ provider)
         DOC_CONVERT_IBM_ICA_MODEL_KEY    - IBM ICA API key (for ibm/ provider, OpenAI-compatible)
         DOC_CONVERT_IBM_ICA_BASE_URL     - IBM ICA base URL (e.g. https://api.servicesessentials.ibm.com/v1)
+        DOC_CONVERT_EI_API_KEY           - Enterprise Innovation API key (for ei/ provider)
+        DOC_CONVERT_EI_BASE_URL          - Enterprise Innovation base URL
+        DOC_CONVERT_DEFAULT_CAPTIONS     - Default captions spec (e.g. ei/Qwen3.8-27B, smolvlm, off)
+        DOC_CONVERT_DEFAULT_OCR_MODEL    - Default OCR model spec (e.g. ei/Qwen3.8-27B, local, off)
         DEVPASS_API_KEY                  - DevPass LLM gateway API key (for devpass/ provider)
         DEVPASS_BASE_URL                 - DevPass base URL (default: https://api.llmgateway.io/v1)
         DOC_CONVERT_GOOGLE_CREDENTIALS   - Path to Google credentials JSON (for Google Docs/Sheets)
@@ -29,13 +33,18 @@ class Settings(BaseSettings):
         DOC_CONVERT_LLM_TIMEOUT          - Timeout in seconds for LLM HTTP calls (default: 120.0)
     """
 
-    model_config = SettingsConfigDict(env_prefix="DOC_CONVERT_", extra="ignore", populate_by_name=True)
+    model_config = SettingsConfigDict(env_prefix="DOC_CONVERT_", extra="ignore", populate_by_name=True, env_file=".env", env_file_encoding="utf-8")
 
     models_path: str = str(DEFAULT_MODELS_PATH)
     google_api_key: str = ""
     openrouter_api_key: str = ""
     ibm_ica_model_key: str = ""
     ibm_ica_base_url: str = ""
+    ei_api_key: str = ""
+    ei_base_url: str = ""
+    # Default captions and OCR model specs (optional, override CLI defaults)
+    default_captions: str = ""
+    default_ocr_model: str = ""
     # devpass vars have no DOC_CONVERT_ prefix: read DEVPASS_* directly.
     devpass_api_key: str = Field(
         default="",
@@ -51,3 +60,8 @@ class Settings(BaseSettings):
     notes_api_url: str = "https://notes.mcp.scm-platform.org"
     llm_max_tokens: int = 16384
     llm_timeout: float = 120.0
+
+
+def get_settings() -> Settings:
+    """Get the application settings instance."""
+    return Settings()
