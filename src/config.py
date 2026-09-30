@@ -31,6 +31,7 @@ class Settings(BaseSettings):
         DOC_CONVERT_NOTES_API_URL        - Notes API base URL (default: https://notes.mcp.scm-platform.org)
         DOC_CONVERT_LLM_MAX_TOKENS       - Maximum tokens for LLM generation (default: 16384)
         DOC_CONVERT_LLM_TIMEOUT          - Timeout in seconds for LLM HTTP calls (default: 120.0)
+        DOC_CONVERT_DISABLE_SSL          - Disable SSL certificate verification (dev only, default: false)
     """
 
     model_config = SettingsConfigDict(env_prefix="DOC_CONVERT_", extra="ignore", populate_by_name=True, env_file=".env", env_file_encoding="utf-8")
@@ -60,6 +61,8 @@ class Settings(BaseSettings):
     notes_api_url: str = "https://notes.mcp.scm-platform.org"
     llm_max_tokens: int = 16384
     llm_timeout: float = 120.0
+    # Dev-only: disable SSL verification for internal proxies (default: false)
+    disable_ssl: bool = False
 
 
 def get_settings() -> Settings:

@@ -302,7 +302,7 @@ def describe_image(
 def make_client(settings: Settings, workers: int) -> httpx.Client:
     """An httpx client sized for ``workers`` parallel requests."""
     limits = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
-    return httpx.Client(timeout=settings.llm_timeout, limits=limits)
+    return httpx.Client(timeout=settings.llm_timeout, limits=limits, verify=not settings.disable_ssl)
 
 
 def map_concurrent(
